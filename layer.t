@@ -8,25 +8,9 @@ import'oops'
 local num = double --cairo type for color channels, coordinates, etc.
 local num2 = {num, num}
 local num4 = {num, num, num, num}
+
 local color = cairo_color_t
-
-local struct point {x: num, y: num}
-
-local struct rect {x: num, y: num, w: num, h: num}
-
-rect.metamethods.__entrymissing = macro(function(name, obj)
-	if name == 'x1' then return `self.x end
-	if name == 'y1' then return `self.y end
-	if name == 'x2' then return `self.x + self.w end
-	if name == 'y2' then return `self.y + self.h end
-end)
-
-rect.metamethods.__setentry = macro(function(name, obj, rhs)
-	if name == 'x1' then return quote self.x = rhs end end
-	if name == 'y1' then return quote self.y = rhs end end
-	if name == 'x2' then return quote self.w = rhs - self.x end end
-	if name == 'y2' then return quote self.h = rhs - self.y end end
-end)
+local nocolor = `color{0, 0, 0, 0}
 
 --utils ----------------------------------------------------------------------
 
@@ -62,14 +46,19 @@ method window:from_screen(x: num, y :num): num2 return x, y end
 local class layer end
 
 field layer.window: &window = nil
-
 field layer.children: arr(layer)
-field layer.parent: &layer = nil
-field layer.pos_parent: &layer = nil
+field layer._parent: &layer = nil
 
-method layer:remove_layer(e: &layer)
-	var i = self.children:indexat(e)
-	self.children:remove(i)
+method layer:get_parent(): &layer --child interface
+	return self._parent
+end
+
+method layer:set_parent(parent: &layer)
+	if parent ~= nil then
+		parent:add_layer(self)
+	elseif self.parent ~= nil then
+		self.parent:remove_layer(self)
+	end
 end
 
 method layer:add_layer(e: &layer)
@@ -77,21 +66,46 @@ method layer:add_layer(e: &layer)
 	if e.parent ~= nil then
 		e.parent:remove_layer(e)
 	end
-	e.parent = self
+	e._parent = self
 end
 
-method layer:set_layer_index(e: &layer, i: int)
-	var i0 = self.children:indexat(e); assert(i0 ~= -1)
-	i = clamp(i, 0, self.children.len-1)
-	if i0 == i then return end
-	var e = @e
+method layer:add_layer(): &layer
+	assert(self.children:setlen(self.children.len+1))
+	var layer = self.children:at(self.children.len-1)
+	layer:init()
+	layer._parent = self
+	return layer
+end
+
+method layer:remove_layer(e: &layer)
+	var i = self.children:indexat(e)
+	self.children:remove(i)
+end
+
+method layer:move_layer(i0: int, i1: int)
+	assert(i0 >= 0 and i0 < self.children.len)
+	i1 = clamp(i1, 0, self.children.len-1)
+	if i0 == i1 then return end
+	var e = self.children(i0)
 	self.children:remove(i0)
-	assert(self.children:insert(i, e))
+	assert(self.children:insert(i1, e))
 end
 
-layer.metamethods.__call = macro(function(self, i)
-	return `self.children:at(i)
-end)
+method layer:get_layer_index(): int
+	return self.parent.children:indexat(self)
+end
+
+method layer:set_layer_index(i: int)
+	self.parent:move_layer(self.layer_index, i)
+end
+
+method layer:to_back()
+	self.layer_index = 1
+end
+
+method layer:to_front()
+	self.layer_index = 1/0
+end
 
 --layer relative geometry & matrix -------------------------------------------
 
@@ -116,89 +130,56 @@ method layer:snapcx(cx) return `snap(cx-self.cx, self.snap_x)+self.cx end
 method layer:snapcy(cy) return `snap(cy-self.cy, self.snap_y)+self.cy end
 
 method layer:rel_matrix(): cairo_matrix_t --box matrix relative to parent's content space
-	var mt: cairo_matrix_t; mt:init()
-	mt:translate(self:snapx(self.x), self:snapy(self.y))
+	var m: cairo_matrix_t; m:init()
+	m:translate(self:snapx(self.x), self:snapy(self.y))
 	if self.rotation ~= 0 then
-		mt:rotate_around(self.rotation_cx, self.rotation_cy, rad(self.rotation))
+		m:rotate_around(self.rotation_cx, self.rotation_cy, rad(self.rotation))
 	end
 	if self.scale ~= 1 then
-		mt:scale_around(self.scale_cx, self.scale_cy, self.scale, self.scale)
+		m:scale_around(self.scale_cx, self.scale_cy, self.scale, self.scale)
 	end
-	return mt
+	return m
 end
 
 method layer:abs_matrix(): cairo_matrix_t --box matrix in window space
-	var mt = self.pos_parent:abs_matrix()
-	mt:transform(self:rel_matrix())
-	return mt
+	var m = self.parent:abs_matrix()
+	m:transform(self:rel_matrix())
+	return m
 end
 
 method layer:cr_abs_matrix(cr: &cairo_t): cairo_matrix_t --box matrix in cr's current space
-	if self.pos_parent ~= self.parent then
-		return self:abs_matrix()
-	else
-		var m = cr:matrix()
-		m:transform(self:rel_matrix())
-		return m
-	end
+	var m = cr:matrix()
+	m:transform(self:rel_matrix())
+	return m
 end
 
 --convert point from own box space to parent content space.
 method layer:from_box_to_parent(x: num, y: num): num2
-	if self.pos_parent ~= self.parent then
-		var m = self:abs_matrix()
-		var x, y = m:point(x, y)
-		return self.parent:from_window(x, y)
-	else
-		var m = self:rel_matrix()
-		return m:point(x, y)
-	end
+	var m = self:rel_matrix()
+	return m:point(x, y)
 end
 
 --convert point from parent content space to own box space.
 method layer:from_parent_to_box(x: num, y: num): num2
-	if self.pos_parent ~= self.parent then
-		x, y = self.parent:to_window(x, y)
-		var m = self:abs_matrix(); m:invert()
-		return m:point(x, y)
-	else
-		var m = self:rel_matrix(); m:invert()
-		return m:point(x, y)
-	end
+	var m = self:rel_matrix(); m:invert()
+	return m:point(x, y)
 end
 
 --convert point from own content space to parent content space.
 method layer:to_parent(x: num, y: num): num2
-	if self.pos_parent ~= self.parent then
-		var m = self:abs_matrix()
-		x, y = self:padding_pos()
-		m:translate(x, y)
-		x, y = m:point(x, y)
-		return self.parent:from_window(x, y)
-	else
-		var m = self:rel_matrix()
-		x, y = self:padding_pos()
-		m:translate(x, y)
-		return m:point(x, y)
-	end
+	var m = self:rel_matrix()
+	x, y = self:padding_pos()
+	m:translate(x, y)
+	return m:point(x, y)
 end
 
 --convert point from parent content space to own content space.
 method layer:from_parent(x: num, y: num): num2
-	if self.pos_parent ~= self.parent then
-		var m = self:abs_matrix()
-		x, y = self:padding_pos()
-		m:translate(x, y)
-		m:invert()
-		x, y = self.parent:to_window(x, y)
-		return m:point(x, y)
-	else
-		var m = self:rel_matrix()
-		x, y = self:padding_pos()
-		m:translate(x, y)
-		m:invert()
-		return m:point(x, y)
-	end
+	var m = self:rel_matrix()
+	x, y = self:padding_pos()
+	m:translate(x, y)
+	m:invert()
+	return m:point(x, y)
 end
 
 method layer:to_window(x: num, y: num): num2 --parent & child interface
@@ -237,7 +218,6 @@ method layer:from_other(widget, x, y)
 	return widget:to_other(self, x, y)
 end
 
---[[
 --bounding box of a rectangle in another layer's content box.
 function layer:rect_bbox_in(other, x, y, w, h)
 	local x1, y1 = self:to_other(other, x,     y)
@@ -267,123 +247,6 @@ function layer:points_bbox_in(other, t) --t: {x1, y1, x2, y2, ...}
 	return x1, y1, x2-x1, y2-y1
 end
 
---layer parent property & child list -----------------------------------------
-
-layer._parent = false
-
-function layer:get_parent() --child interface
-	return self._parent
-end
-
-function layer:set_parent(parent)
-	if parent then
-		parent:add_layer(self, self._layer_index)
-	elseif self._parent then
-		if self.hot then
-			self.ui.hot_widget = false
-		end
-		if self.active then
-			self.ui.active_widget = false
-		end
-		self._parent:remove_layer(self)
-	end
-end
-
-layer._pos_parent = false
-
-function layer:get_pos_parent() --child interface
-	return self._pos_parent or self._parent
-end
-
-function layer:set_pos_parent(parent)
-	if parent and parent.iswindow then
-		parent = parent.view
-	end
-	if parent == self.parent then
-		parent = false
-	end
-	self._pos_parent = parent
-end
-
-function layer:to_back()
-	self.layer_index = 1
-end
-
-function layer:to_front()
-	self.layer_index = 1/0
-end
-
-function layer:get_layer_index()
-	if self.parent then
-		return indexof(self, self.parent)
-	else
-		return self._layer_index
-	end
-end
-
-function layer:move_layer(layer, index)
-	local new_index = clamp(index, 1, #self)
-	local old_index = indexof(layer, self)
-	if old_index == new_index then return end
-	table.remove(self, old_index)
-	table.insert(self, new_index, layer)
-	self:fire('layer_moved', new_index, old_index)
-	layer:_set_layout_tags(new_index)
-end
-
-function layer:set_layer_index(index)
-	if self.parent then
-		self.parent:move_layer(self, index)
-	else
-		self._layer_index = index
-	end
-end
-
-function layer:each_child(func)
-	for _,layer in ipairs(self) do
-		local ret = layer:each_child(func)
-		if ret ~= nil then return ret end
-		local ret = func(layer)
-		if ret ~= nil then return ret end
-	end
-end
-
-function layer:children()
-	return coroutine.wrap(function()
-		self:each_child(coroutine.yield)
-	end)
-end
-
-function layer:add_layer(layer, index) --parent interface
-	if layer._parent == self then return end
-	if layer._parent then
-		layer._parent:remove_layer(layer)
-	end
-	index = clamp(index or 1/0, 1, #self + 1)
-	push(self, index, layer)
-	layer._parent = self
-	layer.window = self.window
-	self:fire('layer_added', layer, index)
-	layer:_update_enabled(layer.enabled)
-end
-
-function layer:remove_layer(layer) --parent interface
-	assert(layer._parent == self)
-	self:off({nil, layer})
-	popval(self, layer)
-	self:fire('layer_removed', layer)
-	layer._parent = false
-	layer.window = false
-	layer:_update_enabled(layer.enabled)
-end
-
-function layer:_free_children()
-	while #self > 0 do
-		self[#self]:free()
-	end
-end
-]]
-
 --border geometry and drawing ------------------------------------------------
 
 field layer.border_width_left   : num = 0
@@ -396,10 +259,10 @@ field layer.corner_radius_top_right    : num = 0
 field layer.corner_radius_bottom_left  : num = 0
 field layer.corner_radius_bottom_right : num = 0
 
-field layer.border_color_left   : color = 0
-field layer.border_color_right  : color = 0
-field layer.border_color_top    : color = 0
-field layer.border_color_bottom : color = 0
+field layer.border_color_left   : color = nocolor
+field layer.border_color_right  : color = nocolor
+field layer.border_color_top    : color = nocolor
+field layer.border_color_bottom : color = nocolor
 
 field layer.border_dash: arr(double) --{on_width1, off_width1, ...}
 field layer.border_dash_offset: int = 0
@@ -618,9 +481,9 @@ end
 
 method layer:border_visible(): bool
 	return
-		   self.border_width_left ~= 0
-		or self.border_width_top ~= 0
-		or self.border_width_right ~= 0
+		   self.border_width_left   ~= 0
+		or self.border_width_top    ~= 0
+		or self.border_width_right  ~= 0
 		or self.border_width_bottom ~= 0
 end
 
@@ -663,7 +526,7 @@ method layer:draw_border(cr: &cairo_t)
 	var x2, y2 = x1 + w, y1 + h
 	var X2, Y2 = X1 + W, Y1 + H
 
-	if self.border_color_left.a > 0 then
+	if self.border_color_left.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x1, y1+r1y)
 		self:corner_path(cr, x1+r1x, y1+r1y, r1x, r1y, 1, .5, k)
@@ -676,7 +539,7 @@ method layer:draw_border(cr: &cairo_t)
 		cr:fill()
 	end
 
-	if self.border_color_top.a > 0 then
+	if self.border_color_top.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x2-r2x, y1)
 		self:corner_path(cr, x2-r2x, y1+r2y, r2x, r2y, 2, .5, k)
@@ -689,7 +552,7 @@ method layer:draw_border(cr: &cairo_t)
 		cr:fill()
 	end
 
-	if self.border_color_right.a > 0 then
+	if self.border_color_right.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x2, y2-r3y)
 		self:corner_path(cr, x2-r3x, y2-r3y, r3x, r3y, 3, .5, k)
@@ -702,7 +565,7 @@ method layer:draw_border(cr: &cairo_t)
 		cr:fill()
 	end
 
-	if self.border_color_bottom.a > 0 then
+	if self.border_color_bottom.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x1+r4x, y2)
 		self:corner_path(cr, x1+r4x, y2-r4y, r4x, r4y, 4, .5, k)
@@ -716,6 +579,130 @@ method layer:draw_border(cr: &cairo_t)
 	end
 end
 
+--background geometry and drawing --------------------------------------------
+
+BACKGROUND_TYPE_NONE            = 0
+BACKGROUND_TYPE_COLOR           = 1
+BACKGROUND_TYPE_GRADIENT        = 2
+BACKGROUND_TYPE_RADIAL_GRADIENT = 3
+BACKGROUND_TYPE_IMAGE           = 4
+field layer.background_type: enum = BACKGROUND_TYPE_NONE
+field layer.background_hittable = true
+--all backgrounds
+field layer.background_x: num = 0
+field layer.background_y: num = 0
+field layer.background_rotation: num = 0
+field layer.background_rotation_cx: num = 0
+field layer.background_rotation_cy: num = 0
+field layer.background_scale: num = 1
+field layer.background_scale_cx: num = 0
+field layer.background_scale_cy: num = 0
+BACKGROUND_EXTEND_NO      = 0
+BACKGROUND_EXTEND_REPEAT  = 1
+BACKGROUND_EXTEND_REFLECT = 2
+field layer.background_extend: enum = BACKGROUND_EXTEND_REPEAT
+--solid color backgrounds
+field layer.background_color: color = nocolor
+--gradient backgrounds
+field layer.background_colors: arr(num) --{[offset1], color1, ...}
+--linear gradient backgrounds
+field layer.background_x1: num = 0
+field layer.background_y1: num = 0
+field layer.background_x2: num = 0
+field layer.background_y2: num = 0
+--radial gradient backgrounds
+field layer.background_cx1: num = 0
+field layer.background_cy1: num = 0
+field layer.background_r1: num  = 0
+field layer.background_cx2: num = 0
+field layer.background_cy2: num = 0
+field layer.background_r2: num = 0
+--image backgrounds
+--field layer.background_image: image = nil
+
+field layer.background_operator: cairo_operator_t = CAIRO_OPERATOR_OVER
+
+-- overlapping between background clipping edge and border stroke.
+-- -1..1 goes from inside to outside of border edge.
+field layer.background_clip_border_offset: num = 1
+
+method layer:background_visible(): bool
+	return self.background_type ~= BACKGROUND_TYPE_NONE
+end
+
+method layer:background_rect(size_offset: num): num4
+	return self:border_rect(self.background_clip_border_offset, size_offset)
+end
+
+method layer:background_round_rect(size_offset: num): num13
+	return self:border_round_rect(self.background_clip_border_offset, size_offset)
+end
+
+method layer:background_path(cr: &cairo_t, size_offset: num)
+	self:border_path(cr, self.background_clip_border_offset, size_offset)
+end
+
+method layer:paint_background(cr: &cairo_t)
+	cr:operator(self.background_operator)
+	var bg_type = self.background_type
+	if bg_type == BACKGROUND_TYPE_COLOR then
+		cr:rgba(self.background_color)
+		cr:paint()
+		return
+	end
+	var patt
+	if    bg_type == BACKGROUND_TYPE_GRADIENT
+		or bg_type == BACKGROUND_TYPE_RADIAL_GRADIENT
+	then
+		if bg_type == BACKGROUND_TYPE_GRADIENT then
+			patt = self.ui:linear_gradient(
+				self.background_x1,
+				self.background_y1,
+				self.background_x2,
+				self.background_y2,
+				unpack(self.background_colors))
+		elseif bg_type == BACKGROUND_TYPE_RADIAL_GRADIENT then
+			patt = self.ui:radial_gradient(
+				self.background_cx1,
+				self.background_cy1,
+				self.background_r1,
+				self.background_cx2,
+				self.background_cy2,
+				self.background_r2,
+				unpack(self.background_colors))
+		end
+	elseif bg_type == BACKGROUND_TYPE_IMAGE then
+		var img_file = string.format(
+			self.background_image_format,
+			self.background_image
+		)
+		var img = self.ui:image_pattern(img_file)
+		if not img then return end
+		patt = img.patt
+	else
+		assert(false, 'invalid background type %s', tostring(bg_type))
+	end
+	patt:matrix(
+		mt:reset()
+			:translate(
+				self.background_x,
+				self.background_y)
+			:rotate_around(
+				self.background_rotation_cx,
+				self.background_rotation_cy,
+				math.rad(self.background_rotation))
+			:scale_around(
+				self.background_scale_cx,
+				self.background_scale_cy,
+				self.background_scale_x or self.background_scale,
+				self.background_scale_y or self.background_scale)
+			:invert())
+	patt:extend(self.background_extend)
+	cr:source(patt)
+	cr:paint()
+	cr:rgb(0, 0, 0) --release source
+end
+
 --content-box geometry, drawing and hit testing ------------------------------
 
 field layer.padding_left   : num = 0
@@ -723,16 +710,8 @@ field layer.padding_right  : num = 0
 field layer.padding_top    : num = 0
 field layer.padding_bottom : num = 0
 
-method layer:get_pw(): num
-	return self.padding_left + self.padding_right
-end
-method layer:get_ph(): num
-	return self.padding_top + self.padding_bottom
-end
-method layer:get_pw1(): num return self.padding_left   end
-method layer:get_ph1(): num return self.padding_top    end
-method layer:get_pw2(): num return self.padding_right  end
-method layer:get_ph2(): num return self.padding_bottom end
+method layer:get_pw(): num return self.padding_left + self.padding_right end
+method layer:get_ph(): num return self.padding_top + self.padding_bottom end
 
 method layer:padding_pos(): num2 --in box space
 	var px = self.padding_left
