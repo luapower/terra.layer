@@ -70,7 +70,7 @@ method layer:add_layer(e: &layer)
 end
 
 method layer:add_layer(): &layer
-	assert(self.children:setlen(self.children.len+1))
+	assert(self.children:resize(self.children.len+1))
 	var layer = self.children:at(self.children.len-1)
 	layer:init()
 	layer._parent = self
