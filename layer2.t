@@ -11,7 +11,17 @@ local tr2 = require'tr2'
 
 --types ----------------------------------------------------------------------
 
-color = cairo_color_t
+color = cairo_color_t --(double)r,g,b,a
+color.metamethods.__eq = macro(function(c1, c2)
+	return `
+		    c1._0 == c2._0
+		and c1._1 == c2._1
+		and c1._2 == c2._2
+		and c1._3 == c2._3
+end)
+local props = addproperties(color)
+props.alpha = macro(function(self) return `self._3 end)
+
 matrix = cairo_matrix_t
 
 struct BoolBitmap {
@@ -34,10 +44,16 @@ struct Layout {
 	sync_y     : {&Layer, bool} -> bool;
 }
 
+struct CaretProperties {
+	width: num;
+	color: color;
+}
+
 struct LayerManager {
 	tr: tr2.TextRenderer;
 	grid_occupied: BoolBitmap;
 	layers: freelist(Layer);
+	caret: CaretProperties;
 }
 
 struct FlexboxLayoutProperties {
@@ -189,12 +205,11 @@ struct Layer {
 	text_align_y: enum; --ALIGN_*
 	text_segments: tr2.Segs;
 
-	caret_width: num;
-	caret_color: color;
+	caret: &CaretProperties;
 	caret_insert_mode: bool;
 
+	text_selectable: bool;
 	text_selection: tr2.Selection;
-	text_selection_color: color;
 
 	--layouts -----------------------------------------------------------------
 
@@ -780,8 +795,7 @@ terra Layer:set_background_linear_gradient(g: LinearGradient)
 	end
 	self._background_pattern = cairo_pattern_create_linear(g.x1, g.y1, g.x2, g.y2)
 	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset,
-			c.color.red, c.color.green, c.color.blue, c.color.alpha)
+		self._background_pattern:add_color_stop_rgba(c.offset, unpacktuple(c.color))
 	end
 end
 
@@ -798,8 +812,7 @@ terra Layer:set_background_radial_gradient(g: RadialGradient)
 	self._background_pattern = cairo_pattern_create_radial(
 		g.cx1, g.cy1, g.r1, g.cx2, g.cy2, g.r2)
 	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset,
-			c.color.red, c.color.green, c.color.blue, c.color.alpha)
+		self._background_pattern:add_color_stop_rgba(c.offset, unpacktuple(c.color))
 	end
 end
 
@@ -879,6 +892,8 @@ function layer:children_bbox(strict)
 end
 ]]
 
+terra Layer.methods.draw :: {&Layer, &cairo_t} -> {}
+
 terra Layer:_draw_children(cr: &cairo_t): {} --called in content space
 	for _,layer in self.children do
 		layer:draw(cr)
@@ -898,204 +913,60 @@ end
 
 --text geometry & drawing ----------------------------------------------------
 
-function layer:text_visible()
+terra Layer:text_visible()
 	return self.text_runs.array.len > 0
 end
 
-terra Layer:sync_text_shape()
-	if not self:text_visible() then
-		return
-	end
-
-	local t = self._text_tree
-	if not t
-		or self.maxlen      ~= t.maxlen
-		or self.font        ~= t.font
-		or self.font_name   ~= t.font_name
-		or self.font_weight ~= t.font_weight
-		or self.font_slant  ~= t.font_slant
-		or self.font_size   ~= t.font_size
-		or self.nowrap      ~= t.nowrap
-		or self.text_dir    ~= t.text_dir
-	then
-		if not t then
-			t = {}
-			self._text_tree = t
-		end
-		t[1] = self.text_segments
-			and self.text --truncated
-			or self._text --raw
-		t.maxlen      = self.maxlen
-		t.font        = self.font
-		t.font_name   = self.font_name
-		t.font_weight = self.font_weight
-		t.font_slant  = self.font_slant
-		t.font_size   = self.font_size
-		t.nowrap      = self.nowrap
-		t.text_dir    = self.text_dir
-		self.text_segments = self.ui.tr:shape(t)
-		self._text_w = false --invalidate wrap
-		self._text_h = false --invalidate align
-		self.text_selection = false --invalidate selection
-	end
-	return self.text_segments
+terra Layer:_sync_text_shape()
+	if not self:text_visible() then return false end
+	self._manager.tr:shape(&self.text_runs, &self.text_segments)
+	return true
 end
 
-function layer:sync_text_wrap()
-	local segs = self.text_segments
-	if not segs then return nil end
-	local cw = self:client_size()
-	local ls = self.line_spacing
-	local hs = self.hardline_spacing
-	local ps = self.paragraph_spacing
-	if    cw ~= self._text_w
-		or ls ~= self._text_tree.line_spacing
-		or hs ~= self._text_tree.hardline_spacing
-		or ps ~= self._text_tree.paragraph_spacing
-	then
-		self._text_w = cw
-		self._text_tree.line_spacing = ls
-		self._text_tree.hardline_spacing = hs
-		self._text_tree.paragraph_spacing = ps
-		segs:wrap(cw)
-		self._text_h = false --invalidate align
-	end
-	return segs
+terra Layer:_sync_text_wrap()
+	self.text_segments:wrap(self.cw)
 end
 
-function layer:sync_text_align()
-	local segs = self.text_segments
-	if not segs then return nil end
-	local cw, ch = self:client_size()
-	local ha = self._text_align_x
-	local va = self._text_align_y
-	if    ch ~= self._text_h
-		or ha ~= self._text_ha
-		or va ~= self._text_va
-	then
-		self._text_w  = cw
-		self._text_h  = ch
-		self._text_ha = ha
-		self._text_va = va
-		segs:align(0, 0, cw, ch, ha, va)
+terra Layer:_sync_text_align()
+	self.text_segments:align(0, 0, self.cw, self.ch,
+		self.text_align_x, self.text_align_y)
+	if self.text_selectable then
+		self.text_selection:init(&self.text_segments)
 	end
-	if self.text_selectable and not self.text_selection then
-		self.text_selection = self:create_text_selection(segs)
-	end
-	return segs
 end
 
-function layer:get_baseline()
-	if not self:text_visible() then return end
+terra Layer:get_baseline()
+	if not self:text_visible() then return self.h end
 	return self.text_segments.lines.baseline
 end
 
-function layer:draw_text(cr)
-	local segs = self.text_segments
-	if not segs then return end
-	self._text_tree.color    = self.text_color
-	self._text_tree.opacity  = self.text_opacity
-	self._text_tree.operator = self.text_operator
-	local x1, y1, x2, y2 = cr:clip_extents()
-	segs:clip(x1, y1, x2-x1, y2-y1)
-	segs:paint(cr)
+terra Layer:_draw_text(cr: &cairo_t)
+	var x1: double, y1: double, x2: double, y2: double
+	cr:clip_extents(&x1, &y1, &x2, &y2)
+	self.text_segments:clip(x1, y1, x2-x1, y2-y1)
+	self._manager.tr:paint(cr, &self.text_segments)
 end
 
+--[[
 function layer:text_bbox()
 	if not self:text_visible() then
 		return 0, 0, 0, 0
 	end
 	return self.text_segments:bbox()
 end
+]]
 
 --text caret & selection drawing ---------------------------------------------
 
-layer.caret_width = 1
-layer.caret_color = '#fff'
-layer.caret_opacity = 1
-
-layer.text_selectable = false
-layer.text_selection = false --selection object
-layer.text_selection_color = '#66f6'
-
---hiding the caret and dimming the selection while the window is inactive.
-ui:style('layer !:window_active', {
-	caret_opacity = 0,
-	text_selection_color = '#66f3',
-})
-
-ui:style('layer :insert_mode', {
-	caret_color = '#fff6',
-})
-
---blinking the caret.
-ui:style('layer :focused !:insert_mode :window_active', {
-	caret_opacity = 0,
-	transition_caret_opacity = function(self)
-		return self.text_editable
-	end,
-	transition_delay_caret_opacity = function(self)
-		return self.ui.caret_blink_time
-	end,
-	transition_times_caret_opacity = 1/0, --blink indefinitely
-	transition_blend_caret_opacity = 'restart',
-})
-
-function layer:create_text_selection(segs)
-	local sel = segs:selection()
-	if not sel then return end --invalid font
-
-	--reset the caret blinking whenever a cursor is being acted upon,
-	--regardles of whether it changes position or not.
-	local c1, c2 = sel:cursors()
-	local set = c1.set
-	function c1.set(...)
-		self:blink_caret()
-		return set(...)
-	end
-	local set = c2.set
-	function c2.set(...)
-		self:blink_caret()
-		return set(...)
-	end
-
-	--scroll to view the caret and fire the `caret_moved` event.
-	function sel.changed(sel, cursor)
-		self:fire('selection_changed', cursor)
-		self:invalidate()
-		if cursor == sel.cursor2 then
-			self:run_after_layout(function()
-				self:make_visible_caret()
-				self:fire'caret_moved'
-			end)
-		end
-	end
-
-	self:_sync_text_cursor_props(sel)
-
-	return sel
-end
-
-function layer:blink_caret()
-	if not self.focused then return end
-	if not self.caret_visible then
-		self.caret_visible = true
-		self:invalidate()
-	end
-	self:transition{
-		attr = 'caret_opacity',
-		val = self:end_value'caret_opacity',
-	}
-end
-
-function layer:caret_rect()
+--[[
+terra Layer:caret_rect()
 	local x, y, w, h = self.text_selection.cursor2:rect(self.caret_width)
 	local x, w = self:snapxw(x, w)
 	local y, h = self:snapyh(y, h)
 	return x, y, w, h
 end
 
-function layer:caret_visibility_rect()
+terra Layer:caret_visibility_rect()
 	local x, y, w, h = self:caret_rect()
 	--enlarge the caret rect to contain the line spacing.
 	local line = self.text_selection.cursor2.seg.line
@@ -1104,7 +975,7 @@ function layer:caret_visibility_rect()
 	return x, y, w, h
 end
 
-function layer:draw_caret(cr)
+terra Layer:draw_caret(cr)
 	if not self.focused then return end
 	if not self.caret_visible then return end
 	local x, y, w, h = self:caret_rect()
@@ -1116,11 +987,12 @@ function layer:draw_caret(cr)
 	cr:fill()
 end
 
-function layer:draw_selection_rect(x, y, w, h, cr)
+terra Layer:draw_selection_rect(x, y, w, h, cr)
 	cr:rectangle(x, y, w, h)
 	cr:fill()
 end
-function layer:draw_text_selection(cr)
+
+terra Layer:draw_text_selection(cr)
 	local sel = self.text_selection
 	if not sel then return end
 	if sel:empty() then return end
@@ -1129,7 +1001,7 @@ function layer:draw_text_selection(cr)
 	sel:rectangles(self.draw_selection_rect, self, cr)
 end
 
-function layer:make_visible_caret()
+terra Layer:make_visible_caret()
 	local segs = self.text_segments
 	local lines = segs.lines
 	local sx, sy = lines.x, lines.y
@@ -1138,17 +1010,10 @@ function layer:make_visible_caret()
 	lines.x, lines.y = box2d.scroll_to_view(x-sx, y-sy, w, h, cw, ch, sx, sy)
 	self:make_visible(self:caret_visibility_rect())
 end
+]]
 
---insert_mode property
-
-layer.insert_mode = false
-layer:stored_property'insert_mode'
-layer:instance_only'insert_mode'
-
-function layer:after_set_insert_mode(value)
-	self.text_selection.cursor2.insert_mode = value
-	self:settag(':insert_mode', value)
-end
+terra Layer:_draw_text_selection(cr: &cairo_t) end
+terra Layer:_draw_caret(cr: &cairo_t) end
 
 --drawing & hit testing ------------------------------------------------------
 
@@ -1174,6 +1039,10 @@ function Layer:content_bbox(strict)
 end
 ]]
 
+CLIP_CONTENT_NOCLIP        = 0
+CLIP_CONTENT_TO_PADDING    = 1
+CLIP_CONTENT_TO_BACKGROUND = 1
+
 terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 
 	if not self.visible or self.opacity <= 0 then
@@ -1190,7 +1059,7 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 	var m = self:cr_abs_matrix(cr)
 	cr:matrix(&m)
 
-	var cc = self.clip_content
+	var cc = self.clip_content ~= CLIP_CONTENT_NOCLIP
 	var bg = self:background_visible()
 
 	--TODO: self:draw_shadow(cr)
@@ -1199,14 +1068,14 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 	if clip then
 		cr:save()
 		cr:new_path()
-		self:background_path(cr) --'background' clipping is implicit here
+		self:background_path(cr, 0) --'background' clipping is implicit here
 		cr:clip()
 		if bg then
 			self:paint_background(cr)
 		end
 		if cc == true then
 			cr:new_path()
-			cr:rectangle(self:padding_rect())
+			cr:rectangle(self.cx, self.cy, self.cw, self.ch)
 			cr:clip()
 		elseif not cc then --clip was only needed to draw the bg
 			cr:restore()
@@ -1216,10 +1085,9 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 	if not cc then
 		self:draw_border(cr)
 	end
-	var cx, cy = self:padding_pos()
-	cr:translate(cx, cy)
+	cr:translate(self.cx, self.cy)
 	self:draw_content(cr)
-	cr:translate(-cx, -cy)
+	cr:translate(-self.cx, -self.cy)
 	if clip then
 		cr:restore()
 	end
@@ -1266,21 +1134,6 @@ ALIGN_SPACE_EVENLY  = tr2.ALIGN_MAX + 4
 ALIGN_SPACE_AROUND  = tr2.ALIGN_MAX + 5
 ALIGN_SPACE_BETWEEN = tr2.ALIGN_MAX + 6
 ALIGN_BASELINE      = tr2.ALIGN_MAX + 7
-
---text layouting -------------------------------------------------------------
-
-terra Layer:text_visible()
-	return self.text_runs.array.len > 0
-end
-
-terra Layer:sync_text_shape() return &self.text_segments end
-terra Layer:sync_text_wrap() end
-terra Layer:sync_text_align() end
-
-terra Layer:get_baseline(): num
-	if not self:text_visible() then return self.h end
-	return self.text_segments.lines.baseline
-end
 
 --layout utils ---------------------------------------------------------------
 
@@ -1330,9 +1183,9 @@ local terra sync(self: &Layer)
 	if not self.visible then return end
 	self.x, self.w = self:snapxw(self.x, self.w)
 	self.y, self.h = self:snapyh(self.y, self.h)
-	if self:sync_text_shape() ~= nil then
-		self:sync_text_wrap()
-		self:sync_text_align()
+	if self:_sync_text_shape() then
+		self:_sync_text_wrap()
+		self:_sync_text_align()
 	end
 	self:_sync_layout_children()
 end
@@ -1377,27 +1230,25 @@ local null_layout = constant(`Layout {
 
 local terra sync(self: &Layer)
 	if not self.visible then return end
-	var segs = self:sync_text_shape()
-	if segs == nil then
+	if self:_sync_text_shape() then
 		self.cw = 0
 		self.ch = 0
 		return
 	end
-	self.cw = max(segs:min_w(), self.min_cw)
-	self:sync_text_wrap()
-	self.cw = max(segs.lines.max_ax, self.min_cw)
-	self.ch = max(self.min_ch, segs.lines.spaced_h)
+	self.cw = max(self.text_segments:min_w(), self.min_cw)
+	self:_sync_text_wrap()
+	self.cw = max(self.text_segments.lines.max_ax, self.min_cw)
+	self.ch = max(self.min_ch, self.text_segments.lines.spaced_h)
 	self.x, self.w = self:snapxw(self.x, self.w)
 	self.y, self.h = self:snapyh(self.y, self.h)
-	self:sync_text_align()
+	self:_sync_text_align()
 	self:_sync_layout_children()
 end
 
 local terra sync_min_w(self: &Layer, other_axis_synced: bool)
 	var min_cw: num
 	if not other_axis_synced then --TODO: or self.nowrap
-		var segs = self:sync_text_shape()
-		min_cw = iif(segs ~= nil, segs:min_w(), 0)
+		min_cw = iif(self:_sync_text_shape(), self.text_segments:min_w(), 0)
 	else
 		--height-in-width-out parent layout with wrapping text not supported
 		min_cw = 0
@@ -1424,14 +1275,14 @@ end
 
 local terra sync_x(self: &Layer, other_axis_synced: bool)
 	if not other_axis_synced then
-		self:sync_text_wrap()
+		self:_sync_text_wrap()
 		return true
 	end
 end
 
 local terra sync_y(self: &Layer, other_axis_synced: bool)
 	if other_axis_synced then
-		self:sync_text_align()
+		self:_sync_text_align()
 		self:_sync_layout_children()
 		return true
 	end
@@ -2646,6 +2497,7 @@ terra Layer:init(manager: &LayerManager)
 
 	self.text_align_x = ALIGN_CENTER
 	self.text_align_y = ALIGN_CENTER
+	self.caret = &self._manager.caret
 
 	self.opacity = 1
 
@@ -2670,6 +2522,9 @@ terra LayerManager:init()
 	self.tr:init()
 	self.grid_occupied:init()
 	self.layers:init()
+
+	self.caret.width = 1
+	self.caret.color = color {1, 1, 1, 1}
 end
 
 terra LayerManager:free()
@@ -2693,17 +2548,16 @@ end
 
 function compile_module()
 	low.compile_module{
-		name = 'layer2',
+		name = 'layer',
 		types = {Layer, LayerManager},
-		methods = {
-			[Layer] = {
-				init=1, free=1,
-			},
-			[LayerManager] = {
-				init=1, free=1,
-			},
-		},
-		linkto = {'cairo', 'freetype', 'harfbuzz'},
+		publish = function(type, name)
+			return not (
+				   name:starts'get_'
+				or name:starts'_'
+				or name:starts'snap'
+			)
+		end,
+		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak'},
 	}
 end
 
