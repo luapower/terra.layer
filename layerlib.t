@@ -1,28 +1,18 @@
 
---if not ... then require'layer2_demo'; return end
-
-local low = require'low'
-local _M = {__index = low}
-setmetatable(_M, _M)
-setfenv(1, _M)
-require'cairo2'
-require'tr2_paint_cairo'
-local tr2 = require'tr2'
+local layerlib = {__index = require'low'}
+setfenv(1, setmetatable(layerlib, layerlib))
+require'cairolib'
+require'trlib_paint_cairo'
+local tr = require'trlib'
+local boxblur = require'boxblurlib'
+local bitmap = require'bitmaplib'
+public = publish'layerlib'
 
 --types ----------------------------------------------------------------------
 
-color = cairo_color_t --(double)r,g,b,a
-color.metamethods.__eq = macro(function(c1, c2)
-	return `
-		    c1._0 == c2._0
-		and c1._1 == c2._1
-		and c1._2 == c2._2
-		and c1._3 == c2._3
-end)
-local props = addproperties(color)
-props.alpha = macro(function(self) return `self._3 end)
-
+color = cairo_color_t; public(cairo_color_t)
 matrix = cairo_matrix_t
+Bitmap = bitmap.Bitmap;
 
 struct BoolBitmap {
 	rows: int;
@@ -44,24 +34,24 @@ struct Layout {
 	sync_y     : {&Layer, bool} -> bool;
 }
 
-struct CaretProperties {
+struct CaretProperties (public) {
 	width: num;
 	color: color;
 }
 
 struct LayerManager {
-	tr: tr2.TextRenderer;
+	tr: tr.TextRenderer;
 	grid_occupied: BoolBitmap;
 	layers: freelist(Layer);
 	caret: CaretProperties;
 }
 
-struct FlexboxLayoutProperties {
+struct FlexboxLayoutProperties (public) {
 	flow: enum; --FLEX_FLOW_*
 	wrap: bool;
 }
 
-struct GridLayoutCol {
+struct GridLayoutCol (public) {
 	x: num;
 	w: num;
 	fr: num;
@@ -72,7 +62,7 @@ struct GridLayoutCol {
 	--visible: bool;
 }
 
-struct GridLayoutProperties {
+struct GridLayoutProperties (public) {
 	cols: arr(num);
 	rows: arr(num);
 	col_gap: num;
@@ -89,32 +79,32 @@ struct GridLayoutProperties {
 	_rows: arr(GridLayoutCol);
 }
 
-struct ColorStop {
+struct ColorStop (public) {
 	offset: num;
 	color: color;
 }
 
-struct LinearGradient {
+struct LinearGradient (public) {
 	x1: num; y1: num;
 	x2: num; y2: num;
 	color_stops: arr(ColorStop);
 }
 
-struct RadialGradient {
+struct RadialGradient (public) {
 	cx1: num; cy1: num; r1: num;
 	cx2: num; cy2: num; r2: num;
 	color_stops: arr(ColorStop);
 }
 
-struct Bitmap {
-	w: int;
-	h: int;
-	stride: int;
-	format: enum; --BITMAP_FORMAT_*
-	pixels: &opaque;
+struct ShadowProperties (public) {
+	x: num;
+	y: num;
+	color: color;
+	blur: int8;
+	passes: int8;
 }
 
-struct Layer {
+struct Layer (public) {
 
 	_manager: &LayerManager;
 
@@ -189,6 +179,8 @@ struct Layer {
 
 	background_extend: enum; --BACKGROUND_EXTEND_*
 
+	shadow: ShadowProperties;
+
 	padding_left   : num;
 	padding_right  : num;
 	padding_top    : num;
@@ -200,20 +192,20 @@ struct Layer {
 
 	--text --------------------------------------------------------------------
 
-	text_runs: tr2.TextRuns;
+	text_runs: tr.TextRuns;
 	text_align_x: enum; --ALIGN_*
 	text_align_y: enum; --ALIGN_*
-	text_segments: tr2.Segs;
+	text_segments: tr.Segs;
 
 	caret: &CaretProperties;
 	caret_insert_mode: bool;
 
 	text_selectable: bool;
-	text_selection: tr2.Selection;
+	text_selection: tr.Selection;
 
 	--layouts -----------------------------------------------------------------
 
-	_layout: Layout; --current layout implementation
+	_layout: &Layout; --current layout implementation
 
 	_min_w: num;
 	_min_h: num;
@@ -276,25 +268,39 @@ local terra box2d_offset(d: num, x: num, y: num, w: num, h: num)
 	return x - d, y - d, w + 2*d, h + 2*d
 end
 
---layer hierarchy ------------------------------------------------------------
+--child layer management -----------------------------------------------------
+
+--NOTE: child layers are kept in arrays so they don't have a stable address!
+
+terra LayerManager.methods._free_layer :: {&LayerManager, &Layer} -> {}
+terra Layer.methods._init :: {&Layer, &LayerManager} -> {}
 
 terra Layer:get_parent() --child interface
 	return self._parent
 end
 
 terra Layer:_add_layer(e: &Layer)
-	assert(self.children:add(@e) ~= -1)
+	var e1 = self.children:add_junk(); assert(e1 ~= nil)
+	@e1 = @e
 	if e.parent ~= nil then
 		e.parent:_remove_layer(e)
+	else
+		e._manager:_free_layer(e)
 	end
-	e._parent = self
+	e1._parent = self
+	return e1
 end
 
-terra Layer:set_parent(parent: &Layer)
+terra Layer:move_to_parent(parent: &Layer)
+	if parent == self.parent then return self end
 	if parent ~= nil then
-		parent:_add_layer(self)
+		return parent:_add_layer(self)
 	elseif self.parent ~= nil then
+		var e = @self
 		self.parent:_remove_layer(self)
+		var e1 = e._manager.layers:alloc()
+		@e1 = e
+		return e1
 	end
 end
 
@@ -302,28 +308,30 @@ terra Layer:_remove_layer(e: &Layer)
 	self.children:remove(self.children:indexat(e))
 end
 
-terra Layer:_move_layer(i0: int, i1: int)
-	i1 = clamp(i1, 0, self.children.len-1)
-	if i0 == i1 then return end
-	var e = self.children(i0)
-	self.children:remove(i0)
-	assert(self.children:insert(i1, e))
-end
-
-terra Layer:get_layer_index(): int
+terra Layer:get_index(): int
 	return self.parent.children:indexat(self)
 end
 
-terra Layer:set_layer_index(i: int)
-	self.parent:_move_layer(self.layer_index, i)
+terra Layer:move_to_index(i: int)
+	assert(self.parent ~= nil)
+	self.parent.children:move(self.index, i)
+	return self.parent.children:at(i)
 end
 
-terra Layer:to_back()
-	self.layer_index = 0
+terra Layer:move_to_back()
+	return self:move_to_index(0)
 end
 
-terra Layer:to_front()
-	self.layer_index = maxint
+terra Layer:move_to_front()
+	return self:move_to_index(maxint)
+end
+
+terra Layer:add_layer()
+	var e = self.children:add_junk()
+	assert(e ~= nil)
+	e:_init(self._manager)
+	e._parent = self
+	return e
 end
 
 --geometry utils -------------------------------------------------------------
@@ -488,7 +496,7 @@ end
 
 --corner radius at pixel offset from the stroke's center on one dimension.
 local terra offset_radius(r: num, o: num)
-	return iif(r > 0, max(0, r + o), 0)
+	return iif(r > 0, max(0.0, r + o), 0.0)
 end
 
 --border rect at %-offset in border width, plus radii of rounded corners.
@@ -634,7 +642,7 @@ terra Layer:border_path(cr: &cairo_t, offset: num, size_offset: num)
 	cr:close_path()
 end
 
-terra Layer:border_visible(): bool
+terra Layer:_border_visible(): bool
 	return
 		   self.border_width_left   ~= 0
 		or self.border_width_top    ~= 0
@@ -642,8 +650,8 @@ terra Layer:border_visible(): bool
 		or self.border_width_bottom ~= 0
 end
 
-terra Layer:draw_border(cr: &cairo_t)
-	if not self:border_visible() then return end
+terra Layer:_draw_border(cr: &cairo_t)
+	if not self:_border_visible() then return end
 
 	--seamless drawing when all side colors are the same.
 	if self.border_color_left == self.border_color_top
@@ -795,7 +803,7 @@ terra Layer:set_background_linear_gradient(g: LinearGradient)
 	end
 	self._background_pattern = cairo_pattern_create_linear(g.x1, g.y1, g.x2, g.y2)
 	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset, unpacktuple(c.color))
+		self._background_pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color))
 	end
 end
 
@@ -812,7 +820,7 @@ terra Layer:set_background_radial_gradient(g: RadialGradient)
 	self._background_pattern = cairo_pattern_create_radial(
 		g.cx1, g.cy1, g.r1, g.cx2, g.cy2, g.r2)
 	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset, unpacktuple(c.color))
+		self._background_pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color))
 	end
 end
 
@@ -865,6 +873,125 @@ terra Layer:paint_background(cr: &cairo_t)
 	cr:source(patt)
 	cr:paint()
 	cr:rgb(0, 0, 0) --release source
+end
+
+--box-shadow geometry and drawing --------------------------------------------
+
+terra Layer:_shadow_visible()
+	return self.shadow.blur > 0 or self.shadow.x ~= 0.0 or self.shadow.y ~= 0.0
+end
+
+terra Layer:_shadow_rect(size: num)
+	if self:_border_visible() then
+		return self:border_rect(1, size)
+	else
+		return self:background_rect(size)
+	end
+end
+
+terra Layer:_shadow_round_rect(size: num)
+	if self:_border_visible() then
+		return self:border_round_rect(1, size)
+	else
+		return self:background_round_rect(size)
+	end
+end
+
+terra Layer:_shadow_path(cr: &cairo_t, size: num)
+	if self:_border_visible() then
+		self:border_path(cr, 1, size)
+	else
+		self:background_path(cr, size)
+	end
+end
+
+struct ShadowKey {
+	return t.shadow_blur == self.shadow_blur
+		and t.x == x and t.y == y and t.w == w and t.h == h
+		and t.r1x == r1x and t.r1y == r1y and t.r2x == r2x and t.r2y == r2y
+		and t.r3x == r3x and t.r3y == r3y and t.r4x == r4x and t.r4y == r4y
+		and t.k == k
+}
+
+--[[
+terra Layer:shadow_valid_key(t)
+	if not t.shadow_blur then return end
+	local x, y, w, h, r1x, r1y, r2x, r2y, r3x, r3y, r4x, r4y, k =
+		self:shadow_round_rect(0)
+	return t.shadow_blur == self.shadow_blur
+		and t.x == x and t.y == y and t.w == w and t.h == h
+		and t.r1x == r1x and t.r1y == r1y and t.r2x == r2x and t.r2y == r2y
+		and t.r3x == r3x and t.r3y == r3y and t.r4x == r4x and t.r4y == r4y
+		and t.k == k
+end
+
+function layer:shadow_store_key(t)
+	t.shadow_blur = self.shadow_blur
+	t.x, t.y, t.w, t.h, t.r1x, t.r1y,
+		t.r2x, t.r2y, t.r3x, t.r3y, t.r4x, t.r4y, t.k =
+			self:shadow_round_rect(0)
+end
+]]
+
+terra Layer:_draw_shadow(cr: &cairo_t)
+	if not self:_shadow_visible() then return end
+
+	--[[
+	local t = self._shadow or {}
+	self._shadow = t
+	local passes = self._shadow_blur_passes
+	local radius = self.shadow.blur
+	local spread = radius * passes
+
+	--check if the cached shadow image is still valid
+	if not self:shadow_valid_key(t) then
+
+		local blur = t.blur
+		local grow_blur = blur and blur.max_radius < spread
+		local max_radius = spread * (grow_blur and 2 or 1)
+		local bx, by, bw, bh = self:shadow_rect(max_radius)
+		local new_blur = grow_blur or not blur or bw > t.bw or bh > t.bh
+
+		--store cache invalidation keys
+		self:shadow_store_key(t)
+
+		if new_blur then
+
+			t.blur = boxblur.new(bw, bh, 'g8', max_radius)
+			t.bx, t.by, t.bw, t.bh = bx, by, bw, bh
+
+			function t.blur.repaint(blur, src)
+				local ssr = cairo.image_surface(src)
+				local scr = ssr:context()
+				scr:operator'source'
+				scr:rgba(0, 0, 0, 0)
+				scr:paint()
+				scr:translate(-bx, -by)
+				self:shadow_path(scr, 0)
+				scr:rgba(0, 0, 0, 1)
+				scr:fill()
+				scr:free()
+				ssr:free()
+			end
+
+		else
+			t.blur:invalidate()
+		end
+
+		if t.blurred_surface then
+			t.blurred_surface:free()
+		end
+		local dst = t.blur:blur(radius, passes)
+		t.blurred_surface = cairo.image_surface(dst)
+	end
+
+	local sx = t.bx + self.shadow.x
+	local sy = t.by + self.shadow.y
+	cr:translate(sx, sy)
+	cr:rgba(self.shadow.color)
+	cr:mask(t.blurred_surface)
+	cr:translate(-sx, -sy)
+	]]
 end
 
 --content-box geometry, drawing and hit testing ------------------------------
@@ -975,7 +1102,7 @@ terra Layer:caret_visibility_rect()
 	return x, y, w, h
 end
 
-terra Layer:draw_caret(cr)
+terra Layer:_draw_caret(cr)
 	if not self.focused then return end
 	if not self.caret_visible then return end
 	local x, y, w, h = self:caret_rect()
@@ -987,12 +1114,12 @@ terra Layer:draw_caret(cr)
 	cr:fill()
 end
 
-terra Layer:draw_selection_rect(x, y, w, h, cr)
+terra Layer:_draw_selection_rect(x, y, w, h, cr)
 	cr:rectangle(x, y, w, h)
 	cr:fill()
 end
 
-terra Layer:draw_text_selection(cr)
+terra Layer:_draw_text_selection(cr)
 	local sel = self.text_selection
 	if not sel then return end
 	if sel:empty() then return end
@@ -1017,7 +1144,7 @@ terra Layer:_draw_caret(cr: &cairo_t) end
 
 --drawing & hit testing ------------------------------------------------------
 
-terra Layer:draw_content(cr: &cairo_t) --called in own content space
+terra Layer:_draw_content(cr: &cairo_t) --called in own content space
 	self:_draw_children(cr)
 	self:_draw_text_selection(cr)
 	self:_draw_text(cr)
@@ -1062,7 +1189,7 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 	var cc = self.clip_content ~= CLIP_CONTENT_NOCLIP
 	var bg = self:background_visible()
 
-	--TODO: self:draw_shadow(cr)
+	self:_draw_shadow(cr)
 
 	var clip = bg or cc
 	if clip then
@@ -1083,17 +1210,17 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 		end
 	end
 	if not cc then
-		self:draw_border(cr)
+		self:_draw_border(cr)
 	end
 	cr:translate(self.cx, self.cy)
-	self:draw_content(cr)
+	self:_draw_content(cr)
 	cr:translate(-self.cx, -self.cy)
 	if clip then
 		cr:restore()
 	end
 
 	if cc then
-		self:draw_border(cr)
+		self:_draw_border(cr)
 	end
 
 	if compose then
@@ -1121,19 +1248,19 @@ terra Layer:_sync_layout_y(b: bool) return self._layout.sync_y(self, b) end
 
 --layouting constants --------------------------------------------------------
 
-ALIGN_AUTO          = tr2.ALIGN_AUTO    --only for align_x
-ALIGN_LEFT          = tr2.ALIGN_LEFT
-ALIGN_RIGHT         = tr2.ALIGN_RIGHT
-ALIGN_CENTER        = tr2.ALIGN_CENTER
-ALIGN_TOP           = tr2.ALIGN_TOP     --same as ALIGN_LEFT!
-ALIGN_BOTTOM        = tr2.ALIGN_BOTTOM  --same as ALIGN_RIGHT!
-ALIGN_STRETCH       = tr2.ALIGN_MAX + 1
-ALIGN_START         = tr2.ALIGN_MAX + 2 --left for LTR text, right for RTL
-ALIGN_END           = tr2.ALIGN_MAX + 3 --right for LTR text, left for RTL
-ALIGN_SPACE_EVENLY  = tr2.ALIGN_MAX + 4
-ALIGN_SPACE_AROUND  = tr2.ALIGN_MAX + 5
-ALIGN_SPACE_BETWEEN = tr2.ALIGN_MAX + 6
-ALIGN_BASELINE      = tr2.ALIGN_MAX + 7
+ALIGN_AUTO          = tr.ALIGN_AUTO    --only for align_x
+ALIGN_LEFT          = tr.ALIGN_LEFT
+ALIGN_RIGHT         = tr.ALIGN_RIGHT
+ALIGN_CENTER        = tr.ALIGN_CENTER
+ALIGN_TOP           = tr.ALIGN_TOP     --same as ALIGN_LEFT!
+ALIGN_BOTTOM        = tr.ALIGN_BOTTOM  --same as ALIGN_RIGHT!
+ALIGN_STRETCH       = tr.ALIGN_MAX + 1
+ALIGN_START         = tr.ALIGN_MAX + 2 --left for LTR text, right for RTL
+ALIGN_END           = tr.ALIGN_MAX + 3 --right for LTR text, left for RTL
+ALIGN_SPACE_EVENLY  = tr.ALIGN_MAX + 4
+ALIGN_SPACE_AROUND  = tr.ALIGN_MAX + 5
+ALIGN_SPACE_BETWEEN = tr.ALIGN_MAX + 6
+ALIGN_BASELINE      = tr.ALIGN_MAX + 7
 
 --layout utils ---------------------------------------------------------------
 
@@ -1343,10 +1470,10 @@ local function stretch_items_main_axis_func(T, X, W)
 		for i = i, j do
 			var item = items:at(i)
 			if item.inlayout then
-				total_fr = total_fr + max(0, item.fr)
+				total_fr = total_fr + max(0.0, item.fr)
 			end
 		end
-		total_fr = max(1, total_fr) --treat sub-unit fractions like css flexbox
+		total_fr = max(1.0, total_fr) --treat sub-unit fractions like css flexbox
 
 		--compute the total overflow width and total free width.
 		var total_overflow_w = 0
@@ -1355,9 +1482,9 @@ local function stretch_items_main_axis_func(T, X, W)
 			var item = items:at(i)
 			if item.inlayout then
 				var min_w = item.[_MIN_W]
-				var flex_w = total_w * max(0, item.fr) / total_fr
-				var overflow_w = max(0, min_w - flex_w)
-				var free_w = max(0, flex_w - min_w)
+				var flex_w = total_w * max(0.0, item.fr) / total_fr
+				var overflow_w = max(0.0, min_w - flex_w)
+				var free_w = max(0.0, flex_w - min_w)
 				total_overflow_w = total_overflow_w + overflow_w
 				total_free_w = total_free_w + free_w
 			end
@@ -2466,7 +2593,7 @@ terra Layer:set_layout(type: enum)
 	if self._layout.free ~= nil then
 		self._layout.free(self)
 	end
-	self._layout = layouts[type]
+	self._layout = &layouts[type]
 	if self._layout.init ~= nil then
 		self._layout.init(self)
 	end
@@ -2474,7 +2601,7 @@ end
 
 --init/free ------------------------------------------------------------------
 
-terra Layer:init(manager: &LayerManager)
+terra Layer:_init(manager: &LayerManager)
 
 	fill(self)
 
@@ -2501,7 +2628,7 @@ terra Layer:init(manager: &LayerManager)
 
 	self.opacity = 1
 
-	self._layout = null_layout
+	self._layout = &null_layout
 	self.align_items_x = ALIGN_STRETCH
 	self.align_items_y = ALIGN_STRETCH
 	self.item_align_x  = ALIGN_STRETCH
@@ -2513,7 +2640,11 @@ terra Layer:free(): {}
 	self.children:free()
 	self.border_dash:free()
 	self.layout = LAYOUT_NULL
-	self._manager:free_layer(self)
+	if self.parent ~= nil then
+		self.parent:_remove_layer(self)
+	else
+		self._manager:_free_layer(self)
+	end
 end
 
 --layer manager --------------------------------------------------------------
@@ -2533,34 +2664,51 @@ terra LayerManager:free()
 	self.tr:free()
 end
 
-terra LayerManager:new_layer()
-	var layer = self.layers:alloc()
-	assert(layer ~= nil)
-	layer:init(self)
-	return layer
+terra LayerManager:layer()
+	var e = self.layers:alloc()
+	assert(e ~= nil)
+	e:_init(self)
+	return e
 end
 
-terra LayerManager:free_layer(layer: &Layer)
+terra LayerManager:_free_layer(layer: &Layer)
 	self.layers:release(layer)
 end
 
+terra layer_manager()
+	var man = new(LayerManager)
+	man:init()
+	return man
+end
+public(layer_manager)
+
 --C/ffi module ---------------------------------------------------------------
 
-function compile_module()
-	low.compile_module{
-		name = 'layer',
-		types = {Layer, LayerManager},
-		publish = function(type, name)
-			return not (
-				   name:starts'get_'
-				or name:starts'_'
-				or name:starts'snap'
-			)
-		end,
-		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak'},
-	}
+public:getenums(layerlib)
+
+Layer.metamethods.__ismethodpublic = function(T, name)
+	return not (
+			name:starts'get_'
+		or name:starts'_'
+		or name:starts'snap'
+	)
 end
 
-compile_module()
+function build(self)
+	public:build{
+		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak'},
+	}
 
-return _M
+	local public = publish'arr_double'
+	public(arr(double))
+	public(arr(double).view_type)
+	public:build()
+end
+
+if not ... then
+	print'Compiling...'
+	build()
+	print(sizeof(Layer), 'sizeof(Layer)')
+end
+
+return layerlib
