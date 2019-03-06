@@ -6,13 +6,32 @@ require'trlib_paint_cairo'
 local tr = require'trlib'
 local boxblur = require'boxblurlib'
 local bitmap = require'bitmaplib'
-public = publish'layerlib'
+
+ALIGN_AUTO          = tr.ALIGN_AUTO    --only for align_x
+ALIGN_LEFT          = tr.ALIGN_LEFT
+ALIGN_RIGHT         = tr.ALIGN_RIGHT
+ALIGN_CENTER        = tr.ALIGN_CENTER
+ALIGN_TOP           = tr.ALIGN_TOP     --same as ALIGN_LEFT!
+ALIGN_BOTTOM        = tr.ALIGN_BOTTOM  --same as ALIGN_RIGHT!
+ALIGN_STRETCH       = tr.ALIGN_MAX + 1
+ALIGN_START         = tr.ALIGN_MAX + 2 --left for LTR text, right for RTL
+ALIGN_END           = tr.ALIGN_MAX + 3 --right for LTR text, left for RTL
+ALIGN_SPACE_EVENLY  = tr.ALIGN_MAX + 4
+ALIGN_SPACE_AROUND  = tr.ALIGN_MAX + 5
+ALIGN_SPACE_BETWEEN = tr.ALIGN_MAX + 6
+ALIGN_BASELINE      = tr.ALIGN_MAX + 7
 
 --types ----------------------------------------------------------------------
 
-color = cairo_color_t; public(cairo_color_t)
+color = cairo_argb32_color_t
 matrix = cairo_matrix_t
+
 Bitmap = bitmap.Bitmap;
+
+terra Bitmap:surface()
+	return cairo_image_surface_create_for_data(
+		[&uint8](self.pixels), self.format, self.w, self.h, self.stride)
+end
 
 struct BoolBitmap {
 	rows: int;
@@ -20,9 +39,283 @@ struct BoolBitmap {
 	bits: arr(bool);
 }
 
+terra BoolBitmap:init()
+	self.rows = 0
+	self.cols = 0
+	self.bits:init()
+end
+
+terra BoolBitmap:free()
+	self.bits:free()
+end
+
 struct Layer;
 
-struct Layout {
+BorderLineToFunc = {&Layer, &cairo_t, num, num, num} -> {}
+BorderLineToFunc.__typename_ffi = 'BorderLineToFunc'
+
+struct LayerBorder {
+	left   : num;
+	right  : num;
+	top    : num;
+	bottom : num;
+
+	corner_radius_top_left     : num;
+	corner_radius_top_right    : num;
+	corner_radius_bottom_left  : num;
+	corner_radius_bottom_right : num;
+	--draw rounded corners with a modified bezier for smoother line-to-arc
+	--transitions. kappa=1 uses circle arcs instead.
+	corner_radius_kappa: num;
+
+	color_left   : color;
+	color_right  : color;
+	color_top    : color;
+	color_bottom : color;
+
+	dash: arr(double);
+	dash_offset: int;
+
+	offset: num;
+
+	line_to: BorderLineToFunc;
+}
+gettersandsetters(LayerBorder)
+
+local default_border = constant(`LayerBorder {
+	left = 0;
+	right = 0;
+	top = 0;
+	bottom = 0;
+
+	corner_radius_top_left     = 0;
+	corner_radius_top_right    = 0;
+	corner_radius_bottom_left  = 0;
+	corner_radius_bottom_right = 0;
+	corner_radius_kappa = 1.2;
+
+	color_left   = color {0};
+	color_right  = color {0};
+	color_top    = color {0};
+	color_bottom = color {0};
+
+	dash = [arr(double)](nil);
+	dash_offset = 0;
+
+	offset = -1;  --inner border
+
+	line_to = nil;
+})
+
+terra LayerBorder:init()
+	@self = default_border
+end
+
+terra LayerBorder:free()
+	self.dash:free()
+end
+
+struct ColorStop {
+	offset: num;
+	color: color;
+}
+
+struct LinearGradientPoints {
+	x1: num; y1: num;
+	x2: num; y2: num;
+}
+
+struct RadialGradientCircles {
+	cx1: num; cy1: num; r1: num;
+	cx2: num; cy2: num; r2: num;
+}
+
+GRADIENT_TYPE_LINEAR = 1
+GRADIENT_TYPE_RADIAL = 2
+
+struct Gradient {
+	_type: enum; --GRADIENT_TYPE_*
+	color_stops: arr(ColorStop);
+	union {
+		_points: LinearGradientPoints;
+		_circles: RadialGradientCircles;
+	}
+}
+gettersandsetters(Gradient)
+
+terra Gradient:get_type()
+	return self._type
+end
+
+terra Gradient:set_type(type: enum)
+	if self._type ~= type then
+		if type == GRADIENT_TYPE_LINEAR then
+			fill(&self._points)
+		elseif type == GRADIENT_TYPE_RADIAL then
+			fill(&self._circles)
+		end
+		self._type = type
+	end
+end
+
+terra Gradient:init()
+	self.type = GRADIENT_TYPE_LINEAR
+	self.color_stops:init()
+end
+
+terra Gradient:free()
+	self.color_stops:free()
+end
+
+terra Gradient:get_points()
+	assert(self.type == GRADIENT_TYPE_LINEAR)
+	return &self._points
+end
+
+terra Gradient:get_circles()
+	assert(self.type == GRADIENT_TYPE_RADIAL)
+	return &self._circles
+end
+
+terra Gradient:get_newpoints()
+	self.type = GRADIENT_TYPE_LINEAR
+	return &self._points
+end
+
+terra Gradient:get_newcircles()
+	self.type = GRADIENT_TYPE_RADIAL
+	return &self._circles
+end
+
+BACKGROUND_TYPE_NONE     = 0
+BACKGROUND_TYPE_COLOR    = 1
+BACKGROUND_TYPE_GRADIENT = 2
+BACKGROUND_TYPE_IMAGE    = 3
+
+BACKGROUND_EXTEND_NO      = 0
+BACKGROUND_EXTEND_REPEAT  = 1
+BACKGROUND_EXTEND_REFLECT = 2
+
+struct LayerBackground {
+	_type: enum; --BACKGROUND_TYPE_*
+	union {
+		_color: color;
+		_gradient: Gradient;
+		_image: Bitmap;
+	}
+	_pattern: &cairo_pattern_t;
+
+	hittable: bool;
+	-- overlapping between background clipping edge and border stroke.
+	-- -1..1 goes from inside to outside of border edge.
+	clip_border_offset: num;
+	operator: enum; --OPERATOR_*
+
+	x: num;
+	y: num;
+
+	rotation: num;
+	rotation_cx: num;
+	rotation_cy: num;
+
+	scale: num;
+	scale_cx: num;
+	scale_cy: num;
+
+	extend: enum; --BACKGROUND_EXTEND_*
+}
+gettersandsetters(LayerBackground)
+
+local default_background = constant(`LayerBackground {
+	_type = BACKGROUND_TYPE_NONE;
+	_pattern = nil;
+
+	hittable = true;
+
+	clip_border_offset = 1;
+	operator = CAIRO_OPERATOR_OVER;
+
+	x = 0.0;
+	y = 0.0;
+
+	rotation = 0.0;
+	rotation_cx = 0.0;
+	rotation_cy = 0.0;
+
+	scale = 1.0;
+	scale_cx = 0.0;
+	scale_cy = 0.0;
+
+	extend = BACKGROUND_EXTEND_REPEAT;
+})
+
+struct ShadowValidKeyRoundRect {
+	x: num; y: num;
+	w: num; h: num;
+	r1x: num; r1y: num;
+	r2x: num; r2y: num;
+	r3x: num; r3y: num;
+	r4x: num; r4y: num;
+	k: num;
+}
+terra ShadowValidKeyRoundRect:equal(other: &ShadowValidKeyRoundRect)
+	return equal(self, other)
+end
+
+struct ShadowValidKey {
+	blur  : uint8;
+	passes: uint8;
+	union {
+		rr: ShadowValidKeyRoundRect;
+		path: cairo_path_t;
+	}
+}
+
+struct ShadowState {
+	key: ShadowValidKey;
+	blur: boxblur.Blur;
+	blurred_surface: &cairo_surface_t;
+	x: num; y: num;
+}
+
+struct LayerShadow {
+	x: num;
+	y: num;
+	color: color;
+	blur: uint8;
+	passes: uint8;
+	_state: ShadowState;
+}
+
+local default_shadow = constant(`LayerShadow {
+	x = 0.0; y = 0.0; blur = 0; passes = 0;
+})
+
+struct LayerText {
+	runs: tr.TextRuns;
+	align_x: enum; --ALIGN_*
+	align_y: enum; --ALIGN_*
+	segments: tr.Segs;
+	caret_width: num;
+	caret_color: color;
+	caret_insert_mode: bool;
+	selectable: bool;
+	selection: tr.Selection;
+}
+
+terra LayerText:init()
+	self.align_x = ALIGN_CENTER
+	self.align_y = ALIGN_CENTER
+	self.caret_width = 1.0
+	self.caret_color = color {0xffffffff}
+end
+
+terra LayerText:free()
+	self.segments:free()
+	self.runs:free()
+end
+
+struct LayoutSolver {
 	type       : enum; --LAYOUT_*
 	axis_order : enum; --AXIS_ORDER_*
 	init       : {&Layer} -> {};
@@ -34,24 +327,29 @@ struct Layout {
 	sync_y     : {&Layer, bool} -> bool;
 }
 
-struct CaretProperties (public) {
-	width: num;
-	color: color;
-}
+struct FlexboxLayout {
+	--common to flexbox & grid
+	align_items_x: enum;  --ALIGN_*
+	align_items_y: enum;  --ALIGN_*
+ 	item_align_x: enum;   --ALIGN_*
+	item_align_y: enum;   --ALIGN_*
 
-struct LayerManager {
-	tr: tr.TextRenderer;
-	grid_occupied: BoolBitmap;
-	layers: freelist(Layer);
-	caret: CaretProperties;
-}
-
-struct FlexboxLayoutProperties (public) {
 	flow: enum; --FLEX_FLOW_*
 	wrap: bool;
+
+	__reserved: uint8[2]; --to appease the freelist
 }
 
-struct GridLayoutCol (public) {
+terra FlexboxLayout:init()
+	self.align_items_x = ALIGN_STRETCH
+	self.align_items_y = ALIGN_STRETCH
+	self.item_align_x  = ALIGN_STRETCH
+	self.item_align_y  = ALIGN_STRETCH
+end
+
+terra FlexboxLayout:free() end
+
+struct GridLayoutCol {
 	x: num;
 	w: num;
 	fr: num;
@@ -59,10 +357,15 @@ struct GridLayoutCol (public) {
 	_min_w: num;
 	snap_x: bool;
 	inlayout: bool;
-	--visible: bool;
 }
 
-struct GridLayoutProperties (public) {
+struct GridLayout {
+	--common to flexbox & grid
+	align_items_x: enum;  --ALIGN_*
+	align_items_y: enum;  --ALIGN_*
+ 	item_align_x: enum;   --ALIGN_*
+	item_align_y: enum;   --ALIGN_*
+
 	cols: arr(num);
 	rows: arr(num);
 	col_gap: num;
@@ -70,6 +373,7 @@ struct GridLayoutProperties (public) {
 	flow: enum; --GRID_FLOW_* mask
 	wrap: int;
 	min_lines: int;
+
 	--computed by the auto-positioning algorithm.
 	_flip_rows: bool;
 	_flip_cols: bool;
@@ -79,36 +383,69 @@ struct GridLayoutProperties (public) {
 	_rows: arr(GridLayoutCol);
 }
 
-struct ColorStop (public) {
-	offset: num;
-	color: color;
+terra GridLayout:init()
+	self.align_items_x = ALIGN_STRETCH
+	self.align_items_y = ALIGN_STRETCH
+	self.item_align_x  = ALIGN_STRETCH
+	self.item_align_y  = ALIGN_STRETCH
+
+	self.cols:init()
+	self.rows:init()
+	self._cols:init()
+	self._rows:init()
+end
+
+terra GridLayout:free()
+	self.cols:free()
+	self.rows:free()
+	self._cols:free()
+	self._rows:free()
+end
+
+struct LayerManager {
+	tr: tr.TextRenderer;
+	grid_occupied: BoolBitmap;
+
+	layers          : freelist(Layer);
+	borders         : freelist(LayerBorder);
+	backgrounds     : freelist(LayerBackground);
+	shadows         : freelist(LayerShadow);
+	texts           : freelist(LayerText);
+	flexbox_layouts : freelist(FlexboxLayout);
+	grid_layouts    : freelist(GridLayout);
+
+	--
 }
 
-struct LinearGradient (public) {
-	x1: num; y1: num;
-	x2: num; y2: num;
-	color_stops: arr(ColorStop);
-}
+terra LayerManager:init()
+	self.tr              :init()
+	self.grid_occupied   :init()
+	self.layers          :init()
+	self.borders         :init()
+	self.backgrounds     :init()
+	self.shadows         :init()
+	self.texts           :init()
+	self.flexbox_layouts :init()
+	self.grid_layouts    :init()
+end
 
-struct RadialGradient (public) {
-	cx1: num; cy1: num; r1: num;
-	cx2: num; cy2: num; r2: num;
-	color_stops: arr(ColorStop);
-}
+terra LayerManager:free()
+	self.backgrounds     :free()
+	self.shadows         :free()
+	self.texts           :free()
+	self.flexbox_layouts :free()
+	self.grid_layouts    :free()
+	self.borders         :free()
+	self.layers          :free()
+	self.grid_occupied   :free()
+	self.tr              :free()
+end
 
-struct ShadowProperties (public) {
-	x: num;
-	y: num;
-	color: color;
-	blur: int8;
-	passes: int8;
-}
+struct Layer {
 
-struct Layer (public) {
+	manager: &LayerManager;
 
-	_manager: &LayerManager;
-
-	_parent: &Layer;
+	parent: &Layer;
 	children: arr(Layer);
 
 	x: num;
@@ -127,59 +464,9 @@ struct Layer (public) {
 	snap_x: bool;
 	snap_y: bool;
 
-	border_width_left   : num;
-	border_width_right  : num;
-	border_width_top    : num;
-	border_width_bottom : num;
-
-	corner_radius_top_left     : num;
-	corner_radius_top_right    : num;
-	corner_radius_bottom_left  : num;
-	corner_radius_bottom_right : num;
-
-	--draw rounded corners with a modified bezier for smoother line-to-arc
-	--transitions. kappa=1 uses circle arcs instead.
-	corner_radius_kappa: num;
-
-	border_color_left   : color;
-	border_color_right  : color;
-	border_color_top    : color;
-	border_color_bottom : color;
-
-	border_dash: arr(double);
-	border_dash_offset: int;
-
-	border_offset: num;
-
-	_background_type: enum; --BACKGROUND_TYPE_*
-	union {
-		background_color: color;
-		_background_linear_gradient: LinearGradient;
-		_background_radial_gradient: RadialGradient;
-		_background_image: Bitmap;
-	}
-	_background_pattern: &cairo_pattern_t;
-
-	background_hittable: bool;
-	-- overlapping between background clipping edge and border stroke.
-	-- -1..1 goes from inside to outside of border edge.
-	background_clip_border_offset: num;
-	background_operator: enum; --OPERATOR_*
-
-	background_x: num;
-	background_y: num;
-
-	background_rotation: num;
-	background_rotation_cx: num;
-	background_rotation_cy: num;
-
-	background_scale: num;
-	background_scale_cx: num;
-	background_scale_cy: num;
-
-	background_extend: enum; --BACKGROUND_EXTEND_*
-
-	shadow: ShadowProperties;
+	border: &LayerBorder;
+	background: &LayerBackground;
+	shadow: &LayerShadow;
 
 	padding_left   : num;
 	padding_right  : num;
@@ -190,48 +477,34 @@ struct Layer (public) {
 	opacity: num;
 	clip_content: enum; --CLIP_CONTENT_*
 
-	--text --------------------------------------------------------------------
-
-	text_runs: tr.TextRuns;
-	text_align_x: enum; --ALIGN_*
-	text_align_y: enum; --ALIGN_*
-	text_segments: tr.Segs;
-
-	caret: &CaretProperties;
-	caret_insert_mode: bool;
-
-	text_selectable: bool;
-	text_selection: tr.Selection;
+	text: &LayerText;
 
 	--layouts -----------------------------------------------------------------
 
-	_layout: &Layout; --current layout implementation
+	layout: &LayoutSolver; --current layout implementation
 
+	--all layouts
 	_min_w: num;
 	_min_h: num;
 
+	--flex and grid layouts
 	min_cw: num;
 	min_ch: num;
+	union {
+		flex: &FlexboxLayout;
+		grid: &GridLayout;
+	}
 
-	align_items_x: enum;  --ALIGN_*
-	align_items_y: enum;  --ALIGN_*
- 	item_align_x: enum;   --ALIGN_*
-	item_align_y: enum;   --ALIGN_*
-
+	--flex or grid parent layout
 	align_x: enum; --ALIGN_*
 	align_y: enum; --ALIGN_*
 
-	union {
-		flex: FlexboxLayoutProperties;
-		grid: GridLayoutProperties;
-	}
-
-	--flex layout / element fields
+	--child of flex layout
 	fr: num;
 	break_before: bool;
 	break_after : bool;
 
-	--grid layout / element fields
+	--child of grid layout
 	grid_row: int;
 	grid_col: int;
 	grid_row_span: int;
@@ -243,7 +516,6 @@ struct Layer (public) {
 	_grid_col_span: int;
 
 }
-
 gettersandsetters(Layer)
 
 --utils ----------------------------------------------------------------------
@@ -266,72 +538,6 @@ end
 --offset a rectangle by d (outward if d is positive)
 local terra box2d_offset(d: num, x: num, y: num, w: num, h: num)
 	return x - d, y - d, w + 2*d, h + 2*d
-end
-
---child layer management -----------------------------------------------------
-
---NOTE: child layers are kept in arrays so they don't have a stable address!
-
-terra LayerManager.methods._free_layer :: {&LayerManager, &Layer} -> {}
-terra Layer.methods._init :: {&Layer, &LayerManager} -> {}
-
-terra Layer:get_parent() --child interface
-	return self._parent
-end
-
-terra Layer:_add_layer(e: &Layer)
-	var e1 = self.children:add_junk(); assert(e1 ~= nil)
-	@e1 = @e
-	if e.parent ~= nil then
-		e.parent:_remove_layer(e)
-	else
-		e._manager:_free_layer(e)
-	end
-	e1._parent = self
-	return e1
-end
-
-terra Layer:move_to_parent(parent: &Layer)
-	if parent == self.parent then return self end
-	if parent ~= nil then
-		return parent:_add_layer(self)
-	elseif self.parent ~= nil then
-		var e = @self
-		self.parent:_remove_layer(self)
-		var e1 = e._manager.layers:alloc()
-		@e1 = e
-		return e1
-	end
-end
-
-terra Layer:_remove_layer(e: &Layer)
-	self.children:remove(self.children:indexat(e))
-end
-
-terra Layer:get_index(): int
-	return self.parent.children:indexat(self)
-end
-
-terra Layer:move_to_index(i: int)
-	assert(self.parent ~= nil)
-	self.parent.children:move(self.index, i)
-	return self.parent.children:at(i)
-end
-
-terra Layer:move_to_back()
-	return self:move_to_index(0)
-end
-
-terra Layer:move_to_front()
-	return self:move_to_index(maxint)
-end
-
-terra Layer:add_layer()
-	var e = self.children:add_junk()
-	assert(e ~= nil)
-	e:_init(self._manager)
-	e._parent = self
-	return e
 end
 
 --geometry utils -------------------------------------------------------------
@@ -430,49 +636,20 @@ terra Layer:from_window(x: num, y: num): {num, num} --parent & child interface
 	return self:from_parent(x, y)
 end
 
---TODO: window connection
---[[
-terra Layer:to_screen(x: num, y: num)
-	var x, y = self:to_window(x, y)
-	return self.window:to_screen(x, y)
-end
-
-terra Layer:from_screen(x: num, y: num)
-	var x, y = self.window:from_screen(x, y)
-	return self:from_window(x, y)
-end
-
---convert point from own content space to other's content space.
-terra Layer:to_other(other: &other, x: num, y: num)
-	if other.window == self.window then
-		x, y = self:to_window(x, y)
-		return other:from_window(x, y)
-	else
-		x, y = self:to_screen(x, y)
-		return other:from_screen(x, y)
-	end
-end
-
---convert point from other's content space to own content space
-terra Layer:from_other(other: &Layer, x: num, y: num)
-	return other:to_other(self, x, y)
-end
-]]
-
 --border geometry and drawing ------------------------------------------------
 
 --border edge widths relative to box rect at %-offset in border width.
 --offset is in -1..1 where -1=inner edge, 0=center, 1=outer edge.
 --returned widths are positive when inside and negative when outside box rect.
-terra Layer:_border_edge_widths(offset: num)
-	var o = self.border_offset + offset + 1
-	var w1 = lerp(o, -1, 1, self.border_width_left,   0)
-	var h1 = lerp(o, -1, 1, self.border_width_top,    0)
-	var w2 = lerp(o, -1, 1, self.border_width_right,  0)
-	var h2 = lerp(o, -1, 1, self.border_width_bottom, 0)
+terra LayerBorder:edge_widths(offset: num, max_w: num, max_h: num)
+	var o = self.offset + offset + 1
+	var w1 = lerp(o, -1, 1, self.left,   0)
+	var h1 = lerp(o, -1, 1, self.top,    0)
+	var w2 = lerp(o, -1, 1, self.right,  0)
+	var h2 = lerp(o, -1, 1, self.bottom, 0)
 	--adjust overlapping widths by scaling them down proportionally.
-	if w1 + w2 > self.w or h1 + h2 > self.h then
-		var scale = min(self.w / (w1 + w2), self.h / (h1 + h2))
+	if w1 + w2 > max_w or h1 + h2 > max_h then
+		var scale = min(max_w / (w1 + w2), max_h / (h1 + h2))
 		w1 = w1 * scale
 		h1 = h1 * scale
 		w2 = w2 * scale
@@ -481,14 +658,9 @@ terra Layer:_border_edge_widths(offset: num)
 	return w1, h1, w2, h2
 end
 
-terra Layer:border_pos(offset: num)
-	var w, h, _, _2 = self:_border_edge_widths(offset)
-	return w, h
-end
-
 --border rect at %-offset in border width.
 terra Layer:border_rect(offset: num, size_offset: num)
-	var w1, h1, w2, h2 = self:_border_edge_widths(offset)
+	var w1, h1, w2, h2 = self.border:edge_widths(offset, self.w, self.h)
 	var w = self.w - w2 - w1
 	var h = self.h - h2 - h1
 	return box2d_offset(size_offset, w1, h1, w, h)
@@ -502,7 +674,7 @@ end
 --border rect at %-offset in border width, plus radii of rounded corners.
 terra Layer:border_round_rect(offset: num, size_offset: num)
 
-	var k = self.corner_radius_kappa
+	var k = self.border.corner_radius_kappa
 
 	var x1, y1, w, h = self:border_rect(0, 0) --at stroke center
 	var X1, Y1, W, H = self:border_rect(offset, size_offset) --at offset
@@ -510,10 +682,10 @@ terra Layer:border_round_rect(offset: num, size_offset: num)
 	var x2, y2 = x1 + w, y1 + h
 	var X2, Y2 = X1 + W, Y1 + H
 
-	var r1 = self.corner_radius_top_left
-	var r2 = self.corner_radius_top_right
-	var r3 = self.corner_radius_bottom_right
-	var r4 = self.corner_radius_bottom_left
+	var r1 = self.border.corner_radius_top_left
+	var r2 = self.border.corner_radius_top_right
+	var r3 = self.border.corner_radius_bottom_right
+	var r4 = self.border.corner_radius_bottom_left
 
 	--offset the radii to preserve curvature at offset.
 	var r1x = offset_radius(r1, x1-X1)
@@ -622,7 +794,11 @@ terra Layer:corner_path(cr: &cairo_t, cx: num, cy: num, rx: num, ry: num, q1: nu
 	end
 end
 
-terra Layer:border_line_to(cr: &cairo_t, x: num, y: num, q: num) end --stub (used by tablist)
+terra Layer:border_line_to(cr: &cairo_t, x: num, y: num, q: num)
+	if self.border.line_to ~= nil then
+		self.border.line_to(self, cr, x, y, q)
+	end
+end
 
 --trace the border contour path at offset.
 --offset is in -1..1 where -1=inner edge, 0=center, 1=outer edge.
@@ -642,32 +818,32 @@ terra Layer:border_path(cr: &cairo_t, offset: num, size_offset: num)
 	cr:close_path()
 end
 
-terra Layer:_border_visible(): bool
+terra Layer:border_visible()
 	return
-		   self.border_width_left   ~= 0
-		or self.border_width_top    ~= 0
-		or self.border_width_right  ~= 0
-		or self.border_width_bottom ~= 0
+		   self.border.left   ~= 0
+		or self.border.top    ~= 0
+		or self.border.right  ~= 0
+		or self.border.bottom ~= 0
 end
 
-terra Layer:_draw_border(cr: &cairo_t)
-	if not self:_border_visible() then return end
+terra Layer:draw_border(cr: &cairo_t)
+	if not self:border_visible() then return end
 
 	--seamless drawing when all side colors are the same.
-	if self.border_color_left == self.border_color_top
-		and self.border_color_left == self.border_color_right
-		and self.border_color_left == self.border_color_bottom
+	if self.border.color_left.uint == self.border.color_top.uint
+		and self.border.color_left.uint == self.border.color_right.uint
+		and self.border.color_left.uint == self.border.color_bottom.uint
 	then
 		cr:new_path()
-		cr:rgba(self.border_color_bottom)
-		if self.border_width_left == self.border_width_top
-			and self.border_width_left == self.border_width_right
-			and self.border_width_left == self.border_width_bottom
+		cr:rgba(self.border.color_bottom)
+		if self.border.left == self.border.top
+			and self.border.left == self.border.right
+			and self.border.left == self.border.bottom
 		then --stroke-based terra (doesn't require path offseting; supports dashing)
 			self:border_path(cr, 0, 0)
-			cr:line_width(self.border_width_left)
-			if self.border_dash.len > 0 then
-				cr:dash(self.border_dash.elements, self.border_dash.len, self.border_dash_offset)
+			cr:line_width(self.border.left)
+			if self.border.dash.len > 0 then
+				cr:dash(self.border.dash.elements, self.border.dash.len, self.border.dash_offset)
 			end
 			cr:stroke()
 		else --fill-based terra (requires path offsetting; supports patterns)
@@ -689,7 +865,7 @@ terra Layer:_draw_border(cr: &cairo_t)
 	var x2, y2 = x1 + w, y1 + h
 	var X2, Y2 = X1 + W, Y1 + H
 
-	if self.border_color_left.alpha > 0 then
+	if self.border.color_left.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x1, y1+r1y)
 		self:corner_path(cr, x1+r1x, y1+r1y, r1x, r1y, 1, .5, k)
@@ -698,11 +874,11 @@ terra Layer:_draw_border(cr: &cairo_t)
 		self:corner_path(cr, X1+R4X, Y2-R4Y, R4X, R4Y, 5, -.5, K)
 		self:corner_path(cr, x1+r4x, y2-r4y, r4x, r4y, 4.5, .5, k)
 		cr:close_path()
-		cr:rgba(self.border_color_left)
+		cr:rgba(self.border.color_left)
 		cr:fill()
 	end
 
-	if self.border_color_top.alpha > 0 then
+	if self.border.color_top.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x2-r2x, y1)
 		self:corner_path(cr, x2-r2x, y1+r2y, r2x, r2y, 2, .5, k)
@@ -711,11 +887,11 @@ terra Layer:_draw_border(cr: &cairo_t)
 		self:corner_path(cr, X1+R1X, Y1+R1Y, R1X, R1Y, 2, -.5, K)
 		self:corner_path(cr, x1+r1x, y1+r1y, r1x, r1y, 1.5, .5, k)
 		cr:close_path()
-		cr:rgba(self.border_color_top)
+		cr:rgba(self.border.color_top)
 		cr:fill()
 	end
 
-	if self.border_color_right.alpha > 0 then
+	if self.border.color_right.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x2, y2-r3y)
 		self:corner_path(cr, x2-r3x, y2-r3y, r3x, r3y, 3, .5, k)
@@ -724,11 +900,11 @@ terra Layer:_draw_border(cr: &cairo_t)
 		self:corner_path(cr, X2-R2X, Y1+R2Y, R2X, R2Y, 3, -.5, K)
 		self:corner_path(cr, x2-r2x, y1+r2y, r2x, r2y, 2.5, .5, k)
 		cr:close_path()
-		cr:rgba(self.border_color_right)
+		cr:rgba(self.border.color_right)
 		cr:fill()
 	end
 
-	if self.border_color_bottom.alpha > 0 then
+	if self.border.color_bottom.alpha > 0 then
 		cr:new_path()
 		cr:move_to(x1+r4x, y2)
 		self:corner_path(cr, x1+r4x, y2-r4y, r4x, r4y, 4, .5, k)
@@ -737,139 +913,138 @@ terra Layer:_draw_border(cr: &cairo_t)
 		self:corner_path(cr, X2-R3X, Y2-R3Y, R3X, R3Y, 4, -.5, K)
 		self:corner_path(cr, x2-r3x, y2-r3y, r3x, r3y, 3.5, .5, k)
 		cr:close_path()
-		cr:rgba(self.border_color_bottom)
+		cr:rgba(self.border.color_bottom)
 		cr:fill()
 	end
 end
 
 --background geometry and drawing --------------------------------------------
 
-BACKGROUND_TYPE_NONE            = 0
-BACKGROUND_TYPE_COLOR           = 1
-BACKGROUND_TYPE_LINEAR_GRADIENT = 2
-BACKGROUND_TYPE_RADIAL_GRADIENT = 3
-BACKGROUND_TYPE_IMAGE           = 4
-
-BACKGROUND_EXTEND_NO      = 0
-BACKGROUND_EXTEND_REPEAT  = 1
-BACKGROUND_EXTEND_REFLECT = 2
-
-terra Layer:get_background_type()
-	return self._background_type
+terra LayerBackground:get_type()
+	return self._type
 end
 
-terra Layer:set_background_type(type: enum)
-	if self._background_type == type then return end
-	if self._background_pattern ~= nil then
-		self._background_pattern:free()
-		self._background_pattern = nil
+terra LayerBackground:set_type(type: enum)
+	if self._type == type then return end
+	free(self._pattern)
+	if self._type == BACKGROUND_TYPE_GRADIENT then
+		self._gradient:free()
+	elseif self._type == BACKGROUND_TYPE_IMAGE then
+		self._image:free()
 	end
 	if type == BACKGROUND_TYPE_COLOR then
-		self.background_color = color {0, 0, 0, 0}
-	elseif type == BACKGROUND_TYPE_LINEAR_GRADIENT then
-		fill(&self._background_linear_gradient)
-	elseif type == BACKGROUND_TYPE_RADIAL_GRADIENT then
-		fill(&self._background_radial_gradient)
+		self._color = color {0}
+	elseif type == BACKGROUND_TYPE_GRADIENT then
+		self._gradient:init()
 	elseif type == BACKGROUND_TYPE_IMAGE then
-		fill(&self._background_image)
+		self._image:init()
 	end
+	self._type = type
 end
 
-terra Layer:background_visible(): bool
-	return self.background_type ~= BACKGROUND_TYPE_NONE
+terra Layer:background_visible()
+	return self.background.type ~= BACKGROUND_TYPE_NONE
+end
+
+terra LayerBackground:init()
+	@self = default_background
+end
+
+terra LayerBackground:free()
+	self.type = BACKGROUND_TYPE_NONE
 end
 
 terra Layer:background_rect(size_offset: num)
-	return self:border_rect(self.background_clip_border_offset, size_offset)
+	return self:border_rect(self.background.clip_border_offset, size_offset)
 end
 
 terra Layer:background_round_rect(size_offset: num)
-	return self:border_round_rect(self.background_clip_border_offset, size_offset)
+	return self:border_round_rect(self.background.clip_border_offset, size_offset)
 end
 
 terra Layer:background_path(cr: &cairo_t, size_offset: num)
-	self:border_path(cr, self.background_clip_border_offset, size_offset)
+	self:border_path(cr, self.background.clip_border_offset, size_offset)
 end
 
-terra Layer:get_background_linear_gradient()
-	return self._background_linear_gradient
+terra LayerBackground:get_color()
+	assert(self.type == BACKGROUND_TYPE_COLOR)
+	return &self._color
 end
 
-terra Layer:set_background_linear_gradient(g: LinearGradient)
-	self.background_type = BACKGROUND_TYPE_LINEAR_GRADIENT
-	self._background_linear_gradient = g
-	if self._background_pattern ~= nil then
-		self._background_pattern:free()
+terra LayerBackground:get_gradient()
+	assert(self.type == BACKGROUND_TYPE_GRADIENT)
+	return &self._gradient
+end
+
+terra LayerBackground:get_image()
+	assert(self.type == BACKGROUND_TYPE_IMAGE)
+	return &self._image
+end
+
+terra LayerBackground:get_newcolor()
+	self.type = BACKGROUND_TYPE_COLOR
+	return &self._color
+end
+
+terra LayerBackground:get_newgradient()
+	self.type = BACKGROUND_TYPE_GRADIENT
+	return &self._gradient
+end
+
+terra LayerBackground:get_newimage()
+	self.type = BACKGROUND_TYPE_IMAGE
+	return &self._image
+end
+
+terra LayerBackground:get_pattern()
+	if self._pattern == nil then
+		if self.type == BACKGROUND_TYPE_GRADIENT then
+			var g = self._gradient
+			if g.type == GRADIENT_TYPE_LINEAR then
+				var p = g._points
+				self._pattern = cairo_pattern_create_linear(p.x1, p.y1, p.x2, p.y2)
+			else
+				var c = g._circles
+				self._pattern = cairo_pattern_create_radial(c.cx1, c.cy1, c.r1, c.cx2, c.cy2, c.r2)
+			end
+			for _,c in g.color_stops do
+				self._pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color.channels))
+			end
+		elseif self.type == BACKGROUND_TYPE_IMAGE then
+			self._pattern = cairo_pattern_create_for_surface(self._image:surface())
+		end
 	end
-	self._background_pattern = cairo_pattern_create_linear(g.x1, g.y1, g.x2, g.y2)
-	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color))
-	end
+	return self._pattern
 end
 
-terra Layer:get_background_radial_gradient()
-	return self._background_radial_gradient
-end
-
-terra Layer:set_background_radial_gradient(g: RadialGradient)
-	self.background_type = BACKGROUND_TYPE_RADIAL_GRADIENT
-	self._background_radial_gradient = g
-	if self._background_pattern ~= nil then
-		self._background_pattern:free()
-	end
-	self._background_pattern = cairo_pattern_create_radial(
-		g.cx1, g.cy1, g.r1, g.cx2, g.cy2, g.r2)
-	for _,c in g.color_stops do
-		self._background_pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color))
-	end
-end
-
-terra Bitmap:surface()
-	return cairo_image_surface_create_for_data(
-		[&uint8](self.pixels), self.format, self.w, self.h, self.stride)
-end
-
-terra Layer:get_background_image()
-	return self._background_image
-end
-
-terra Layer:set_background_image(b: Bitmap)
-	self.background_type = BACKGROUND_TYPE_IMAGE
-	self._background_image = b
-	if self._background_pattern ~= nil then
-		self._background_pattern:free()
-	end
-	self._background_pattern = cairo_pattern_create_for_surface(b:surface())
-end
-
-terra Layer:paint_background(cr: &cairo_t)
-	cr:operator(self.background_operator)
-	if self.background_type == BACKGROUND_TYPE_COLOR then
-		cr:rgba(self.background_color)
+terra LayerBackground:paint(cr: &cairo_t)
+	cr:operator(self.operator)
+	if self.type == BACKGROUND_TYPE_COLOR then
+		cr:rgba(self._color)
 		cr:paint()
 		return
 	end
 	var m: matrix; m:init()
 	m:translate(
-		self.background_x,
-		self.background_y)
-	if self.background_rotation ~= 0 then
+		self.x,
+		self.y)
+	if self.rotation ~= 0 then
 		m:rotate_around(
-			self.background_rotation_cx,
-			self.background_rotation_cy,
-			rad(self.background_rotation))
+			self.rotation_cx,
+			self.rotation_cy,
+			rad(self.rotation))
 	end
-	if self.background_scale ~= 1 then
+	if self.scale ~= 1 then
 		m:scale_around(
-			self.background_scale_cx,
-			self.background_scale_cy,
-			self.background_scale,
-			self.background_scale)
+			self.scale_cx,
+			self.scale_cy,
+			self.scale,
+			self.scale)
 	end
 	m:invert()
-	var patt = self._background_pattern
+	var patt = self.pattern
 	patt:matrix(&m)
-	patt:extend(self.background_extend)
+	patt:extend(self.extend)
 	cr:source(patt)
 	cr:paint()
 	cr:rgb(0, 0, 0) --release source
@@ -877,121 +1052,109 @@ end
 
 --box-shadow geometry and drawing --------------------------------------------
 
-terra Layer:_shadow_visible()
+terra Layer:shadow_visible()
 	return self.shadow.blur > 0 or self.shadow.x ~= 0.0 or self.shadow.y ~= 0.0
 end
 
-terra Layer:_shadow_rect(size: num)
-	if self:_border_visible() then
-		return self:border_rect(1, size)
+terra Layer:shadow_spread()
+	return self.shadow.passes * self.shadow.blur
+end
+
+terra Layer:shadow_bitmap_rect()
+	var spread = self:shadow_spread()
+	if self:border_visible() then
+		return self:border_rect(1, spread)
 	else
-		return self:background_rect(size)
+		return self:background_rect(spread)
 	end
 end
 
-terra Layer:_shadow_round_rect(size: num)
-	if self:_border_visible() then
+terra Layer:shadow_round_rect()
+	var size = self:shadow_spread()
+	if self:border_visible() then
 		return self:border_round_rect(1, size)
 	else
 		return self:background_round_rect(size)
 	end
 end
 
-terra Layer:_shadow_path(cr: &cairo_t, size: num)
-	if self:_border_visible() then
-		self:border_path(cr, 1, size)
+terra Layer:shadow_path(cr: &cairo_t)
+	if self:border_visible() then
+		self:border_path(cr, 1, 0)
 	else
-		self:background_path(cr, size)
+		self:background_path(cr, 0)
 	end
 end
 
-struct ShadowKey {
-	return t.shadow_blur == self.shadow_blur
-		and t.x == x and t.y == y and t.w == w and t.h == h
-		and t.r1x == r1x and t.r1y == r1y and t.r2x == r2x and t.r2y == r2y
-		and t.r3x == r3x and t.r3y == r3y and t.r4x == r4x and t.r4y == r4y
-		and t.k == k
-}
-
---[[
-terra Layer:shadow_valid_key(t)
-	if not t.shadow_blur then return end
-	local x, y, w, h, r1x, r1y, r2x, r2y, r3x, r3y, r4x, r4y, k =
-		self:shadow_round_rect(0)
-	return t.shadow_blur == self.shadow_blur
-		and t.x == x and t.y == y and t.w == w and t.h == h
-		and t.r1x == r1x and t.r1y == r1y and t.r2x == r2x and t.r2y == r2y
-		and t.r3x == r3x and t.r3y == r3y and t.r4x == r4x and t.r4y == r4y
-		and t.k == k
-end
-
-function layer:shadow_store_key(t)
-	t.shadow_blur = self.shadow_blur
-	t.x, t.y, t.w, t.h, t.r1x, t.r1y,
-		t.r2x, t.r2y, t.r3x, t.r3y, t.r4x, t.r4y, t.k =
-			self:shadow_round_rect(0)
-end
-]]
-
-terra Layer:_draw_shadow(cr: &cairo_t)
-	if not self:_shadow_visible() then return end
-
-	--[[
-	local t = self._shadow or {}
-	self._shadow = t
-	local passes = self._shadow_blur_passes
-	local radius = self.shadow.blur
-	local spread = radius * passes
-
-	--check if the cached shadow image is still valid
-	if not self:shadow_valid_key(t) then
-
-		local blur = t.blur
-		local grow_blur = blur and blur.max_radius < spread
-		local max_radius = spread * (grow_blur and 2 or 1)
-		local bx, by, bw, bh = self:shadow_rect(max_radius)
-		local new_blur = grow_blur or not blur or bw > t.bw or bh > t.bh
-
-		--store cache invalidation keys
-		self:shadow_store_key(t)
-
-		if new_blur then
-
-			t.blur = boxblur.new(bw, bh, 'g8', max_radius)
-			t.bx, t.by, t.bw, t.bh = bx, by, bw, bh
-
-			function t.blur.repaint(blur, src)
-				local ssr = cairo.image_surface(src)
-				local scr = ssr:context()
-				scr:operator'source'
-				scr:rgba(0, 0, 0, 0)
-				scr:paint()
-				scr:translate(-bx, -by)
-				self:shadow_path(scr, 0)
-				scr:rgba(0, 0, 0, 1)
-				scr:fill()
-				scr:free()
-				ssr:free()
-			end
-
-		else
-			t.blur:invalidate()
-		end
-
-		if t.blurred_surface then
-			t.blurred_surface:free()
-		end
-		local dst = t.blur:blur(radius, passes)
-		t.blurred_surface = cairo.image_surface(dst)
+terra Layer:shadow_valid_key()
+	var sk: ShadowValidKey; fill(&sk)
+	sk.blur   = self.shadow.blur
+	sk.passes = self.shadow.passes
+	if self.border.line_to == nil then
+		var rr = sk.rr
+		rr.x, rr.y, rr.w, rr.h,
+		rr.r1x, rr.r1y, rr.r2x, rr.r2y, rr.r3x, rr.r3y, rr.r4x, rr.r4y,
+		rr.k = self:shadow_round_rect()
+	else
+		--TODO: store the shadow path instead
 	end
+	return sk
+end
 
-	local sx = t.bx + self.shadow.x
-	local sy = t.by + self.shadow.y
+terra Layer:shadow_valid()
+	var sk1 = self:shadow_valid_key()
+	var sk0 = &self.shadow._state.key
+	var valid =
+		    sk1.blur   == sk0.blur
+		and sk1.passes == sk0.passes
+		and iif(self.border.line_to == nil,
+			sk1.rr  :equal(&sk0.rr),
+			sk1.path:equal(&sk0.path))
+	@sk0 = sk1
+	return valid
+end
+
+terra Layer:repaint_shadow(bmp: &Bitmap)
+	var sr = bmp:surface(); defer sr:free()
+	var cr = sr:context(); defer cr:free()
+	cr:operator(CAIRO_OPERATOR_SOURCE)
+	cr:rgba(0, 0, 0, 0)
+	cr:paint()
+	cr:translate(-self.shadow._state.x, -self.shadow._state.y)
+	self:shadow_path(cr)
+	cr:rgba(0, 0, 0, 1)
+	cr:fill()
+end
+
+terra Layer:draw_shadow(cr: &cairo_t)
+	if not self:shadow_visible() then return end
+	var bx, by, bw, bh = self:shadow_bitmap_rect()
+	self.shadow._state.x = bx
+	self.shadow._state.y = by
+	if not self:shadow_valid() then
+		var bmp = self.shadow._state.blur:blur(
+			bw, bh, self.shadow.blur, self.shadow.passes)
+		free(self.shadow._state.blurred_surface)
+		self.shadow._state.blurred_surface = bmp:surface()
+	end
+	var sx = bx + self.shadow.x
+	var sy = by + self.shadow.y
 	cr:translate(sx, sy)
 	cr:rgba(self.shadow.color)
-	cr:mask(t.blurred_surface)
+	cr:mask(self.shadow._state.blurred_surface, 0, 0)
 	cr:translate(-sx, -sy)
-	]]
+end
+
+terra LayerShadow:init(layer: &Layer)
+	self._state.blur:init(
+		boxblur.BITMAP_FORMAT_G8,
+		[boxblur.RepaintFunc]([Layer.methods.repaint_shadow]),
+		self)
+end
+
+terra LayerShadow:free()
+	free(self._state.blurred_surface)
+	self._state.blur:free()
 end
 
 --content-box geometry, drawing and hit testing ------------------------------
@@ -1021,7 +1184,7 @@ end
 
 terra Layer.methods.draw :: {&Layer, &cairo_t} -> {}
 
-terra Layer:_draw_children(cr: &cairo_t): {} --called in content space
+terra Layer:draw_children(cr: &cairo_t): {} --called in content space
 	for _,layer in self.children do
 		layer:draw(cr)
 	end
@@ -1041,37 +1204,38 @@ end
 --text geometry & drawing ----------------------------------------------------
 
 terra Layer:text_visible()
-	return self.text_runs.array.len > 0
+	return self.text ~= nil
 end
 
-terra Layer:_sync_text_shape()
+terra Layer:sync_text_shape()
 	if not self:text_visible() then return false end
-	self._manager.tr:shape(&self.text_runs, &self.text_segments)
+	self.manager.tr:shape(&self.text.runs, &self.text.segments)
 	return true
 end
 
-terra Layer:_sync_text_wrap()
-	self.text_segments:wrap(self.cw)
+terra Layer:sync_text_wrap()
+	self.text.segments:wrap(self.cw)
 end
 
-terra Layer:_sync_text_align()
-	self.text_segments:align(0, 0, self.cw, self.ch,
-		self.text_align_x, self.text_align_y)
-	if self.text_selectable then
-		self.text_selection:init(&self.text_segments)
+terra Layer:sync_text_align()
+	self.text.segments:align(0, 0, self.cw, self.ch,
+		self.text.align_x, self.text.align_y)
+	if self.text.selectable then
+		self.text.selection:init(&self.text.segments)
 	end
 end
 
 terra Layer:get_baseline()
 	if not self:text_visible() then return self.h end
-	return self.text_segments.lines.baseline
+	return self.text.segments.lines.baseline
 end
 
-terra Layer:_draw_text(cr: &cairo_t)
+terra Layer:draw_text(cr: &cairo_t)
+	if not self:text_visible() then return end
 	var x1: double, y1: double, x2: double, y2: double
 	cr:clip_extents(&x1, &y1, &x2, &y2)
-	self.text_segments:clip(x1, y1, x2-x1, y2-y1)
-	self._manager.tr:paint(cr, &self.text_segments)
+	self.text.segments:clip(x1, y1, x2-x1, y2-y1)
+	self.manager.tr:paint(cr, &self.text.segments)
 end
 
 --[[
@@ -1079,7 +1243,7 @@ function layer:text_bbox()
 	if not self:text_visible() then
 		return 0, 0, 0, 0
 	end
-	return self.text_segments:bbox()
+	return self.text.segments:bbox()
 end
 ]]
 
@@ -1087,7 +1251,7 @@ end
 
 --[[
 terra Layer:caret_rect()
-	local x, y, w, h = self.text_selection.cursor2:rect(self.caret_width)
+	local x, y, w, h = self.text.selection.cursor2:rect(self.caret_width)
 	local x, w = self:snapxw(x, w)
 	local y, h = self:snapyh(y, h)
 	return x, y, w, h
@@ -1096,13 +1260,13 @@ end
 terra Layer:caret_visibility_rect()
 	local x, y, w, h = self:caret_rect()
 	--enlarge the caret rect to contain the line spacing.
-	local line = self.text_selection.cursor2.seg.line
+	local line = self.text.selection.cursor2.seg.line
 	local y = y + line.ascent - line.spaced_ascent
 	local h = line.spaced_ascent - line.spaced_descent
 	return x, y, w, h
 end
 
-terra Layer:_draw_caret(cr)
+terra Layer:draw_caret(cr)
 	if not self.focused then return end
 	if not self.caret_visible then return end
 	local x, y, w, h = self:caret_rect()
@@ -1114,22 +1278,22 @@ terra Layer:_draw_caret(cr)
 	cr:fill()
 end
 
-terra Layer:_draw_selection_rect(x, y, w, h, cr)
+terra Layer:draw_selection_rect(x, y, w, h, cr)
 	cr:rectangle(x, y, w, h)
 	cr:fill()
 end
 
-terra Layer:_draw_text_selection(cr)
-	local sel = self.text_selection
+terra Layer:draw_text_selection(cr)
+	local sel = self.text.selection
 	if not sel then return end
 	if sel:empty() then return end
-	cr:rgba(self.ui:rgba(self.text_selection_color))
+	cr:rgba(self.ui:rgba(self.text.selection_color))
 	cr:new_path()
 	sel:rectangles(self.draw_selection_rect, self, cr)
 end
 
 terra Layer:make_visible_caret()
-	local segs = self.text_segments
+	local segs = self.text.segments
 	local lines = segs.lines
 	local sx, sy = lines.x, lines.y
 	local cw, ch = self:client_size()
@@ -1139,16 +1303,16 @@ terra Layer:make_visible_caret()
 end
 ]]
 
-terra Layer:_draw_text_selection(cr: &cairo_t) end
-terra Layer:_draw_caret(cr: &cairo_t) end
+terra Layer:draw_text_selection(cr: &cairo_t) end
+terra Layer:draw_caret(cr: &cairo_t) end
 
 --drawing & hit testing ------------------------------------------------------
 
-terra Layer:_draw_content(cr: &cairo_t) --called in own content space
-	self:_draw_children(cr)
-	self:_draw_text_selection(cr)
-	self:_draw_text(cr)
-	self:_draw_caret(cr)
+terra Layer:draw_content(cr: &cairo_t) --called in own content space
+	self:draw_children(cr)
+	self:draw_text_selection(cr)
+	self:draw_text(cr)
+	self:draw_caret(cr)
 end
 
 --[[
@@ -1187,9 +1351,9 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 	cr:matrix(&m)
 
 	var cc = self.clip_content ~= CLIP_CONTENT_NOCLIP
-	var bg = self:background_visible()
+	var bg = self.background.type ~= BACKGROUND_TYPE_NONE
 
-	self:_draw_shadow(cr)
+	self:draw_shadow(cr)
 
 	var clip = bg or cc
 	if clip then
@@ -1198,7 +1362,7 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 		self:background_path(cr, 0) --'background' clipping is implicit here
 		cr:clip()
 		if bg then
-			self:paint_background(cr)
+			self.background:paint(cr)
 		end
 		if cc == true then
 			cr:new_path()
@@ -1210,17 +1374,17 @@ terra Layer:draw(cr: &cairo_t) --called in parent's content space; child intf.
 		end
 	end
 	if not cc then
-		self:_draw_border(cr)
+		self:draw_border(cr)
 	end
 	cr:translate(self.cx, self.cy)
-	self:_draw_content(cr)
+	self:draw_content(cr)
 	cr:translate(-self.cx, -self.cy)
 	if clip then
 		cr:restore()
 	end
 
 	if cc then
-		self:_draw_border(cr)
+		self:draw_border(cr)
 	end
 
 	if compose then
@@ -1240,27 +1404,11 @@ LAYOUT_FLEXBOX = 2
 LAYOUT_GRID    = 3
 
 --layout interface forwarders
-terra Layer:_sync_layout()          return self._layout.sync(self) end
-terra Layer:_sync_min_w(b: bool)    return self._layout.sync_min_w(self, b) end
-terra Layer:_sync_min_h(b: bool)    return self._layout.sync_min_h(self, b) end
-terra Layer:_sync_layout_x(b: bool) return self._layout.sync_x(self, b) end
-terra Layer:_sync_layout_y(b: bool) return self._layout.sync_y(self, b) end
-
---layouting constants --------------------------------------------------------
-
-ALIGN_AUTO          = tr.ALIGN_AUTO    --only for align_x
-ALIGN_LEFT          = tr.ALIGN_LEFT
-ALIGN_RIGHT         = tr.ALIGN_RIGHT
-ALIGN_CENTER        = tr.ALIGN_CENTER
-ALIGN_TOP           = tr.ALIGN_TOP     --same as ALIGN_LEFT!
-ALIGN_BOTTOM        = tr.ALIGN_BOTTOM  --same as ALIGN_RIGHT!
-ALIGN_STRETCH       = tr.ALIGN_MAX + 1
-ALIGN_START         = tr.ALIGN_MAX + 2 --left for LTR text, right for RTL
-ALIGN_END           = tr.ALIGN_MAX + 3 --right for LTR text, left for RTL
-ALIGN_SPACE_EVENLY  = tr.ALIGN_MAX + 4
-ALIGN_SPACE_AROUND  = tr.ALIGN_MAX + 5
-ALIGN_SPACE_BETWEEN = tr.ALIGN_MAX + 6
-ALIGN_BASELINE      = tr.ALIGN_MAX + 7
+terra Layer:sync_layout()          return self.layout.sync(self) end
+terra Layer:sync_min_w(b: bool)    return self.layout.sync_min_w(self, b) end
+terra Layer:sync_min_h(b: bool)    return self.layout.sync_min_h(self, b) end
+terra Layer:sync_layout_x(b: bool) return self.layout.sync_x(self, b) end
+terra Layer:sync_layout_y(b: bool) return self.layout.sync_y(self, b) end
 
 --layout utils ---------------------------------------------------------------
 
@@ -1271,9 +1419,9 @@ AXIS_ORDER_YX = 2
 --before they can solve it on the other axis. any content-based layout with
 --wrapped content is like that: can't know the height until wrapping the
 --content which needs to know the width (and viceversa for vertical flow).
-terra Layer:_sync_layout_separate_axes(axis_order: enum, min_w: num, min_h: num)
+terra Layer:sync_layout_separate_axes(axis_order: enum, min_w: num, min_h: num)
 	if not self.visible then return end
-	axis_order = iif(axis_order ~= 0, axis_order, self._layout.axis_order)
+	axis_order = iif(axis_order ~= 0, axis_order, self.layout.axis_order)
 	var sync_x = axis_order == AXIS_ORDER_XY
 	var axis_synced = false
 	var other_axis_synced = false
@@ -1281,12 +1429,12 @@ terra Layer:_sync_layout_separate_axes(axis_order: enum, min_w: num, min_h: num)
 		other_axis_synced = axis_synced
 		if sync_x then
 			--sync the x-axis.
-			self.w = max(self:_sync_min_w(other_axis_synced), min_w)
-			axis_synced = self:_sync_layout_x(other_axis_synced)
+			self.w = max(self:sync_min_w(other_axis_synced), min_w)
+			axis_synced = self:sync_layout_x(other_axis_synced)
 		else
 			--sync the y-axis.
-			self.h = max(self:_sync_min_h(other_axis_synced), min_h)
-			axis_synced = self:_sync_layout_y(other_axis_synced)
+			self.h = max(self:sync_min_h(other_axis_synced), min_h)
+			axis_synced = self:sync_layout_y(other_axis_synced)
 		end
 		if axis_synced and other_axis_synced then
 			break --both axes were solved before last phase.
@@ -1296,9 +1444,9 @@ terra Layer:_sync_layout_separate_axes(axis_order: enum, min_w: num, min_h: num)
 	assert(axis_synced and other_axis_synced)
 end
 
-terra Layer:_sync_layout_children()
+terra Layer:sync_layout_children()
 	for _,layer in self.children do
-		layer:_sync_layout() --recurse
+		layer:sync_layout() --recurse
 	end
 end
 
@@ -1306,27 +1454,27 @@ end
 
 --layouting system entry point: called on the top layer.
 --called by null-layout layers to layout themselves and their children.
-local terra sync(self: &Layer)
+local terra null_sync(self: &Layer)
 	if not self.visible then return end
 	self.x, self.w = self:snapxw(self.x, self.w)
 	self.y, self.h = self:snapyh(self.y, self.h)
-	if self:_sync_text_shape() then
-		self:_sync_text_wrap()
-		self:_sync_text_align()
+	if self:sync_text_shape() then
+		self:sync_text_wrap()
+		self:sync_text_align()
 	end
-	self:_sync_layout_children()
+	self:sync_layout_children()
 end
 
 --called by flexible layouts to know the minimum width of their children.
 --width-in-height-out layouts call this before h and y are sync'ed.
-local terra sync_min_w(self: &Layer, other_axis_synced: bool)
+local terra null_sync_min_w(self: &Layer, other_axis_synced: bool)
 	self._min_w = snap_up(self.min_cw + self.pw, self.snap_x)
 	return self._min_w
 end
 
 --called by flexible layouts to know the minimum height of their children.
 --width-in-height-out layouts call this only after w and x are sync'ed.
-local terra sync_min_h(self: &Layer, other_axis_synced: bool)
+local terra null_sync_min_h(self: &Layer, other_axis_synced: bool)
 	self._min_h = snap_up(self.min_ch + self.ph, self.snap_y)
 	return self._min_h
 end
@@ -1334,48 +1482,48 @@ end
 --called by flexible layouts to sync their children on one axis. in response,
 --null-layouts sync themselves and their children on both axes when the
 --second axis is synced.
-local terra sync_x(self: &Layer, other_axis_synced: bool)
+local terra null_sync_x(self: &Layer, other_axis_synced: bool)
 	if other_axis_synced then
-		self:_sync_layout()
+		self:sync_layout()
 	end
 	return true
 end
 
-local null_layout = constant(`Layout {
+local null_layout = constant(`LayoutSolver {
 	type       = LAYOUT_NULL;
 	axis_order = 0;
 	init       = nil;
 	free       = nil;
-	sync       = sync;
-	sync_min_w = sync_min_w;
-	sync_min_h = sync_min_h;
-	sync_x     = sync_x;
-	sync_y     = sync_x;
+	sync       = null_sync;
+	sync_min_w = null_sync_min_w;
+	sync_min_h = null_sync_min_h;
+	sync_x     = null_sync_x;
+	sync_y     = null_sync_x;
 })
 
 --textbox layout -------------------------------------------------------------
 
-local terra sync(self: &Layer)
+local terra textbox_sync(self: &Layer)
 	if not self.visible then return end
-	if self:_sync_text_shape() then
+	if self:sync_text_shape() then
 		self.cw = 0
 		self.ch = 0
 		return
 	end
-	self.cw = max(self.text_segments:min_w(), self.min_cw)
-	self:_sync_text_wrap()
-	self.cw = max(self.text_segments.lines.max_ax, self.min_cw)
-	self.ch = max(self.min_ch, self.text_segments.lines.spaced_h)
+	self.cw = max(self.text.segments:min_w(), self.min_cw)
+	self:sync_text_wrap()
+	self.cw = max(self.text.segments.lines.max_ax, self.min_cw)
+	self.ch = max(self.min_ch, self.text.segments.lines.spaced_h)
 	self.x, self.w = self:snapxw(self.x, self.w)
 	self.y, self.h = self:snapyh(self.y, self.h)
-	self:_sync_text_align()
-	self:_sync_layout_children()
+	self:sync_text_align()
+	self:sync_layout_children()
 end
 
-local terra sync_min_w(self: &Layer, other_axis_synced: bool)
+local terra textbox_sync_min_w(self: &Layer, other_axis_synced: bool)
 	var min_cw: num
 	if not other_axis_synced then --TODO: or self.nowrap
-		min_cw = iif(self:_sync_text_shape(), self.text_segments:min_w(), 0)
+		min_cw = iif(self:sync_text_shape(), self.text.segments:min_w(), 0)
 	else
 		--height-in-width-out parent layout with wrapping text not supported
 		min_cw = 0
@@ -1386,10 +1534,10 @@ local terra sync_min_w(self: &Layer, other_axis_synced: bool)
 	return min_w
 end
 
-local terra sync_min_h(self: &Layer, other_axis_synced: bool)
+local terra textbox_sync_min_h(self: &Layer, other_axis_synced: bool)
 	var min_ch: num
 	if other_axis_synced then --TODO: or self.nowrap
-		min_ch = self.text_segments.lines.spaced_h
+		min_ch = self.text.segments.lines.spaced_h
 	else
 		--height-in-width-out parent layout with wrapping text not supported
 		min_ch = 0
@@ -1400,31 +1548,31 @@ local terra sync_min_h(self: &Layer, other_axis_synced: bool)
 	return min_h
 end
 
-local terra sync_x(self: &Layer, other_axis_synced: bool)
+local terra textbox_sync_x(self: &Layer, other_axis_synced: bool)
 	if not other_axis_synced then
-		self:_sync_text_wrap()
+		self:sync_text_wrap()
 		return true
 	end
 end
 
-local terra sync_y(self: &Layer, other_axis_synced: bool)
+local terra textbox_sync_y(self: &Layer, other_axis_synced: bool)
 	if other_axis_synced then
-		self:_sync_text_align()
-		self:_sync_layout_children()
+		self:sync_text_align()
+		self:sync_layout_children()
 		return true
 	end
 end
 
-local textbox_layout = constant(`Layout {
+local textbox_layout = constant(`LayoutSolver {
 	type       = LAYOUT_TEXTBOX;
 	axis_order = 0;
 	init       = nil;
 	free       = nil;
-	sync       = sync;
-	sync_min_w = sync_min_w;
-	sync_min_h = sync_min_h;
-	sync_x     = sync_x;
-	sync_y     = sync_x;
+	sync       = textbox_sync;
+	sync_min_w = textbox_sync_min_w;
+	sync_min_h = textbox_sync_min_h;
+	sync_x     = textbox_sync_x;
+	sync_y     = textbox_sync_x;
 })
 
 --stuff common to flexbox & grid layouts -------------------------------------
@@ -1735,7 +1883,7 @@ local function gen_funcs(X, Y, W, H)
 		end
 	end
 
-	Layer.methods['_flexbox_min_cw_'..X] = terra(
+	Layer.methods['flexbox_min_cw_'..X] = terra(
 		self: &Layer, other_axis_synced: bool, align_baseline: bool
 	)
 		if self.flex.wrap then
@@ -1745,7 +1893,7 @@ local function gen_funcs(X, Y, W, H)
 		end
 	end
 
-	Layer.methods['_flexbox_min_ch_'..X] = terra(
+	Layer.methods['flexbox_min_ch_'..X] = terra(
 		self: &Layer, other_axis_synced: bool, align_baseline: bool
 	)
 		if not other_axis_synced and self.flex.wrap then
@@ -1777,7 +1925,7 @@ local function gen_funcs(X, Y, W, H)
 	--stretch and align a line of items on the main axis.
 	local terra stretch_items_x(self: &Layer, i: int, j: int, moving: bool)
 		stretch_items_main_axis_x(
-			self.children, i, j, self.[CW], self.[ITEM_ALIGN_X], moving)
+			self.children, i, j, self.[CW], self.flex.[ITEM_ALIGN_X], moving)
 			--TODO: set_item_x, set_moving_item_x)
 	end
 
@@ -1800,10 +1948,10 @@ local function gen_funcs(X, Y, W, H)
 	end
 
 	--stretch or align a flexbox's items on the main-axis.
-	Layer.methods['_flexbox_sync_x_'..X] = terra(
+	Layer.methods['flexbox_sync_x_'..X] = terra(
 		self: &Layer, other_axis_synced: bool, align_baseline: bool
 	)
-		var align = self.[ALIGN_ITEMS_X]
+		var align = self.flex.[ALIGN_ITEMS_X]
 		var moving = false --TODO: self.moving_layer and true or false
 		for i, j in linewrap{self} do
 			align_items_x(self, i, j, align, moving)
@@ -1816,7 +1964,7 @@ local function gen_funcs(X, Y, W, H)
 		line_y: num, line_h: num, line_baseline: num
 	)
 		var snap_y = self.[SNAP_Y]
-		var align = self.[ITEM_ALIGN_Y]
+		var align = self.flex.[ITEM_ALIGN_Y]
 		for i = i, j do
 			var layer = self.children:at(i)
 			if layer.visible then
@@ -1857,7 +2005,7 @@ local function gen_funcs(X, Y, W, H)
 	end
 
 	--stretch or align a flexbox's items on the cross-axis.
-	Layer.methods['_flexbox_sync_y_'..X] = terra(
+	Layer.methods['flexbox_sync_y_'..X] = terra(
 		self: &Layer, other_axis_synced: bool, align_baseline: bool
 	)
 		if not other_axis_synced and self.flex.wrap then
@@ -1869,7 +2017,7 @@ local function gen_funcs(X, Y, W, H)
 		var lines_y: num
 		var line_spacing: num
 		var line_h: num
-		var align = self.[ALIGN_ITEMS_Y]
+		var align = self.flex.[ALIGN_ITEMS_Y]
 		if align == ALIGN_STRETCH then
 			var lines_h = self.[CH]
 			var line_count = 0
@@ -1910,18 +2058,18 @@ end
 gen_funcs('x', 'y', 'w', 'h')
 gen_funcs('y', 'x', 'h', 'w')
 
-local terra sync_min_w(self: &Layer, other_axis_synced: bool)
+local terra flexbox_sync_min_w(self: &Layer, other_axis_synced: bool)
 
 	--sync all children first (bottom-up sync).
 	for _,layer in self.children do
 		if layer.visible then
-			layer:_sync_min_w(other_axis_synced) --recurse
+			layer:sync_min_w(other_axis_synced) --recurse
 		end
 	end
 
 	var min_cw = iif(self.flex.flow == FLEX_FLOW_X,
-			self:_flexbox_min_cw_x(other_axis_synced, false),
-			self:_flexbox_min_ch_y(other_axis_synced, false))
+			self:flexbox_min_cw_x(other_axis_synced, false),
+			self:flexbox_min_ch_y(other_axis_synced, false))
 
 	min_cw = max(min_cw, self.min_cw)
 	var min_w = min_cw + self.pw
@@ -1929,28 +2077,28 @@ local terra sync_min_w(self: &Layer, other_axis_synced: bool)
 	return min_w
 end
 
-local terra sync_min_h(self: &Layer, other_axis_synced: bool)
+local terra flexbox_sync_min_h(self: &Layer, other_axis_synced: bool)
 
 	var align_baseline = self.flex.flow == FLEX_FLOW_X
-		and self.item_align_y == ALIGN_BASELINE
+		and self.flex.item_align_y == ALIGN_BASELINE
 
 	--sync all children first (bottom-up sync).
 	for _,layer in self.children do
 		if layer.visible then
-			var item_h = layer:_sync_min_h(other_axis_synced) --recurse
+			var item_h = layer:sync_min_h(other_axis_synced) --recurse
 			--for baseline align also layout the children because we need
 			--their baseline. we can do this here because we already know
 			--we won't stretch them beyond their min_h in this case.
 			if align_baseline then
 				layer.h = snap(item_h, self.snap_y)
-				layer:_sync_layout_y(other_axis_synced)
+				layer:sync_layout_y(other_axis_synced)
 			end
 		end
 	end
 
 	var min_ch = iif(self.flex.flow == FLEX_FLOW_X,
-		self:_flexbox_min_ch_x(other_axis_synced, align_baseline),
-		self:_flexbox_min_cw_y(other_axis_synced, align_baseline))
+		self:flexbox_min_ch_x(other_axis_synced, align_baseline),
+		self:flexbox_min_cw_y(other_axis_synced, align_baseline))
 
 	min_ch = max(min_ch, self.min_ch)
 	var min_h = min_ch + self.ph
@@ -1958,55 +2106,67 @@ local terra sync_min_h(self: &Layer, other_axis_synced: bool)
 	return min_h
 end
 
-local terra sync_x(self: &Layer, other_axis_synced: bool)
+local terra flexbox_sync_x(self: &Layer, other_axis_synced: bool)
 
 	var synced = iif(self.flex.flow == FLEX_FLOW_X,
-			self:_flexbox_sync_x_x(other_axis_synced, false),
-			self:_flexbox_sync_y_y(other_axis_synced, false))
+			self:flexbox_sync_x_x(other_axis_synced, false),
+			self:flexbox_sync_y_y(other_axis_synced, false))
 
 	if synced then
 		--sync all children last (top-down sync).
 		for _,layer in self.children do
 			if layer.visible then
-				layer:_sync_layout_x(other_axis_synced) --recurse
+				layer:sync_layout_x(other_axis_synced) --recurse
 			end
 		end
 	end
 	return synced
 end
 
-local terra sync_y(self: &Layer, other_axis_synced: bool)
+local terra flexbox_sync_y(self: &Layer, other_axis_synced: bool)
 
-	if self.flex.flow == FLEX_FLOW_X and self.item_align_y == ALIGN_BASELINE then
+	if self.flex.flow == FLEX_FLOW_X and self.flex.item_align_y == ALIGN_BASELINE then
 		--chilren already sync'ed in sync_min_h().
-		return self:_flexbox_sync_y_x(other_axis_synced, true)
+		return self:flexbox_sync_y_x(other_axis_synced, true)
 	end
 
 	var synced = self.flex.flow == FLEX_FLOW_Y
-		and self:_flexbox_sync_x_y(other_axis_synced, false)
-		 or self:_flexbox_sync_y_x(other_axis_synced, false)
+		and self:flexbox_sync_x_y(other_axis_synced, false)
+		 or self:flexbox_sync_y_x(other_axis_synced, false)
 
 	if synced then
 		--sync all children last (top-down sync).
 		for _,layer in self.children do
 			if layer.visible then
-				layer:_sync_layout_y(other_axis_synced) --recurse
+				layer:sync_layout_y(other_axis_synced) --recurse
 			end
 		end
 	end
 	return synced
 end
 
-local flexbox_layout = constant(`Layout {
+local terra flexbox_sync(self: &Layer)
+	self:sync_layout_separate_axes(0, -inf, -inf)
+end
+
+terra flexbox_init(self: &Layer)
+	self.flex:init()
+end
+
+terra flexbox_free(self: &Layer)
+	self.flex:free()
+end
+
+local flexbox_layout = constant(`LayoutSolver {
 	type       = LAYOUT_FLEXBOX;
 	axis_order = AXIS_ORDER_XY;
-	init       = nil;
-	free       = nil;
-	sync       = sync;
-	sync_min_w = sync_min_w;
-	sync_min_h = sync_min_h;
-	sync_x     = sync_x;
-	sync_y     = sync_x;
+	init       = flexbox_init;
+	free       = flexbox_free;
+	sync       = flexbox_sync;
+	sync_min_w = flexbox_sync_min_w;
+	sync_min_h = flexbox_sync_min_h;
+	sync_x     = flexbox_sync_x;
+	sync_y     = flexbox_sync_x;
 })
 
 --[[
@@ -2046,16 +2206,6 @@ end
 ]]
 
 --bitmap-of-bools object -----------------------------------------------------
-
-terra BoolBitmap:init()
-	self.rows = 0
-	self.cols = 0
-	self.bits:init()
-end
-
-terra BoolBitmap:free()
-	self.bits:free()
-end
 
 terra BoolBitmap:set(row: int, col: int, val: bool)
 	self.bits:set((row - 1) * self.cols + col - 1, val)
@@ -2153,7 +2303,7 @@ local terra clip_span(
 	return row1, col1, row_span, col_span
 end
 
-terra Layer:_sync_layout_grid_autopos()
+terra Layer:sync_layout_grid_autopos()
 
 	var flow = self.grid.flow
 	var col_first = (flow and GRID_FLOW_Y) == 0
@@ -2164,7 +2314,7 @@ terra Layer:_sync_layout_grid_autopos()
 	var max_col = iif(col_first, grid_wrap, self.grid.min_lines)
 	var max_row = iif(row_first, grid_wrap, self.grid.min_lines)
 
-	var occupied = self._manager.grid_occupied
+	var occupied = self.manager.grid_occupied
 	occupied:clear()
 
 	--position explicitly-positioned layers first and mark occupied cells.
@@ -2354,7 +2504,7 @@ local function gen_funcs(X, Y, W, H, COL)
 		--sync all children first (bottom-up sync).
 		for _,layer in self.children do
 			if layer.visible then
-				layer:['_sync_min_'..W](other_axis_synced) --recurse
+				layer:['sync_min_'..W](other_axis_synced) --recurse
 			end
 		end
 
@@ -2472,8 +2622,8 @@ local function gen_funcs(X, Y, W, H, COL)
 		var cols = self.grid.[_COLS]
 		var gap_w = self.grid.[COL_GAP]
 		var container_w = self.[CW]
-		var align_items_x = self.[ALIGN_ITEMS_X]
-		var item_align_x = self.[ITEM_ALIGN_X]
+		var align_items_x = self.grid.[ALIGN_ITEMS_X]
+		var item_align_x = self.grid.[ITEM_ALIGN_X]
 		var snap_x = self.[SNAP_X]
 
 		var ALIGN_START, ALIGN_END = ALIGN_START, ALIGN_END
@@ -2535,7 +2685,7 @@ local function gen_funcs(X, Y, W, H, COL)
 		--sync all children last (top-down sync).
 		for _,layer in self.children do
 			if layer.visible then
-				layer:['_sync_layout_'..X](other_axis_synced) --recurse
+				layer:['sync_layout_'..X](other_axis_synced) --recurse
 			end
 		end
 		return true
@@ -2543,131 +2693,120 @@ local function gen_funcs(X, Y, W, H, COL)
 
 	return sync_min_w, sync_x
 end
-local sync_min_w, sync_x = gen_funcs('x', 'y', 'w', 'h', 'col', ALIGN_LEFT, ALIGN_RIGHT)
-local sync_min_h, sync_y = gen_funcs('y', 'x', 'h', 'w', 'row', ALIGN_TOP, ALIGN_BOTTOM)
+local grid_sync_min_w, grid_sync_x = gen_funcs('x', 'y', 'w', 'h', 'col', ALIGN_LEFT, ALIGN_RIGHT)
+local grid_sync_min_h, grid_sync_y = gen_funcs('y', 'x', 'h', 'w', 'row', ALIGN_TOP, ALIGN_BOTTOM)
 
-local terra sync(self: &Layer)
-	self:_sync_layout_grid_autopos()
-	self:_sync_layout_separate_axes(0, -inf, -inf)
+local terra grid_sync(self: &Layer)
+	self:sync_layout_grid_autopos()
+	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-local terra init(self: &Layer)
-	self.grid.cols:init()
-	self.grid.rows:init()
-	self.grid._cols:init()
-	self.grid._rows:init()
+local terra grid_init(self: &Layer)
+	self.grid:init()
 end
 
-local terra free(self: &Layer)
-	self.grid.cols:free()
-	self.grid.rows:free()
-	self.grid._cols:free()
-	self.grid._rows:free()
+local terra grid_free(self: &Layer)
+	self.grid:free()
 end
 
-local grid_layout = constant(`Layout {
+local grid_layout = constant(`LayoutSolver {
 	type       = LAYOUT_GRID;
 	axis_order = AXIS_ORDER_XY;
-	init       = init;
-	free       = free;
-	sync       = sync;
-	sync_min_w = sync_min_w;
-	sync_min_h = sync_min_h;
-	sync_x     = sync_x;
-	sync_y     = sync_x;
+	init       = grid_init;
+	free       = grid_free;
+	sync       = grid_sync;
+	sync_min_w = grid_sync_min_w;
+	sync_min_h = grid_sync_min_h;
+	sync_x     = grid_sync_x;
+	sync_y     = grid_sync_x;
 })
 
 --layout plugin vtable -------------------------------------------------------
 
 --NOTE: layouts must be added in the order of LAYOUT_* constants.
-local layouts = constant(`arrayof(Layout,
+local layouts = constant(`arrayof(LayoutSolver,
 	null_layout,
 	textbox_layout,
 	flexbox_layout,
 	grid_layout
 ))
 
-terra Layer:get_layout() return self._layout.type end
+terra Layer:get_layout_type() return self.layout.type end
 
-terra Layer:set_layout(type: enum)
-	if self._layout.free ~= nil then
-		self._layout.free(self)
+terra Layer:set_layout_type(type: enum)
+	if self.layout.free ~= nil then
+		self.layout.free(self)
 	end
-	self._layout = &layouts[type]
-	if self._layout.init ~= nil then
-		self._layout.init(self)
+	self.layout = &layouts[type]
+	if self.layout.init ~= nil then
+		self.layout.init(self)
 	end
 end
 
 --init/free ------------------------------------------------------------------
 
-terra Layer:_init(manager: &LayerManager)
+terra Layer:init(manager: &LayerManager)
 
 	fill(self)
 
-	self._manager = manager
+	self.manager = manager
 	self.children:init()
 
 	self.scale = 1.0
 	self.snap_x = true
 	self.snap_y = true
 
-	self.border_dash:init()
-	self.border_offset = -1  --inner border
-	self.corner_radius_kappa = 1.2
+	self.background = &default_background
+	self.border = &default_border
+	self.shadow = &default_shadow
 
-	self.background_hittable = true
-	self.background_scale = 1.0
-	self.background_extend = BACKGROUND_EXTEND_REPEAT
-	self.background_operator = CAIRO_OPERATOR_OVER
-	self.background_clip_border_offset = 1
-
-	self.text_align_x = ALIGN_CENTER
-	self.text_align_y = ALIGN_CENTER
-	self.caret = &self._manager.caret
-
+	self.visible = true
 	self.opacity = 1
 
-	self._layout = &null_layout
-	self.align_items_x = ALIGN_STRETCH
-	self.align_items_y = ALIGN_STRETCH
-	self.item_align_x  = ALIGN_STRETCH
-	self.item_align_y  = ALIGN_STRETCH
-
+	self.layout = &null_layout
 end
 
 terra Layer:free(): {}
 	self.children:free()
-	self.border_dash:free()
-	self.layout = LAYOUT_NULL
+
+	if self.border ~= &default_border then
+		self.border:free()
+		self.manager.borders:release(self.border)
+		self.border = &default_border
+	end
+
+	if self.background ~= &default_background then
+		self.background:free()
+		self.manager.backgrounds:release(self.background)
+		self.background = &default_background
+	end
+
+	if self.shadow ~= &default_shadow then
+		self.shadow:free()
+		self.manager.shadows:release(self.shadow)
+		self.shadow = &default_shadow
+	end
+
+	if self.text ~= nil then
+		self.text:free()
+		self.manager.texts:release(self.text)
+		self.text = nil
+	end
+
+	self.layout_type = LAYOUT_NULL
 	if self.parent ~= nil then
-		self.parent:_remove_layer(self)
+		self.parent.children:remove_at(self)
 	else
-		self._manager:_free_layer(self)
+		self.manager:_free_layer(self)
 	end
 end
 
 --layer manager --------------------------------------------------------------
 
-terra LayerManager:init()
-	self.tr:init()
-	self.grid_occupied:init()
-	self.layers:init()
-
-	self.caret.width = 1
-	self.caret.color = color {1, 1, 1, 1}
-end
-
-terra LayerManager:free()
-	self.layers:free()
-	self.grid_occupied:free()
-	self.tr:free()
-end
-
 terra LayerManager:layer()
 	var e = self.layers:alloc()
 	assert(e ~= nil)
-	e:_init(self)
+	e:init(self)
 	return e
 end
 
@@ -2676,33 +2815,353 @@ terra LayerManager:_free_layer(layer: &Layer)
 end
 
 terra layer_manager()
-	var man = new(LayerManager)
-	man:init()
+	var man = alloc(LayerManager); man:init()
 	return man
 end
-public(layer_manager)
 
 --C/ffi module ---------------------------------------------------------------
 
-public:getenums(layerlib)
+--child layer management
 
-Layer.metamethods.__ismethodpublic = function(T, name)
-	return not (
-			name:starts'get_'
-		or name:starts'_'
-		or name:starts'snap'
-	)
+terra Layer:get_parent() return self.parent end
+terra Layer:get_index(): int return self.parent.children:index_at(self) end
+
+terra Layer:layer_at(i: int) return self.children:at(i) end
+terra Layer:layer_count() return self.children.len end
+
+terra Layer:layer_insert(i: int)
+	var i = self.children:insert_junk(i, 1); assert(i ~= -1)
+	var e = self.children:at(i)
+	e:init(self.manager)
+	e.parent = self
+	return e
 end
 
-function build(self)
-	public:build{
-		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak'},
-	}
+terra Layer:layer_remove(i: int)
+	var e = self.children:at(i); assert(e ~= nil)
+	e:free()
+end
 
-	local public = publish'arr_double'
-	public(arr(double))
-	public(arr(double).view_type)
-	public:build()
+terra Layer:layer_move(i1: int, i2: int) --negative indices allowed
+	self.children:move(i1, i2)
+end
+
+terra Layer:move(parent: &Layer, i: int)
+	var e1 = iif(parent ~= nil,
+		parent:layer_insert(i),
+		self.manager:layer())
+	@e1 = @self
+	e1.parent = parent
+	if self.parent ~= nil then
+		self.parent.children:remove_at(self)
+	else
+		self.manager:_free_layer(self)
+	end
+	return e1
+end
+
+--position and size
+
+terra Layer:get_x() return self.x end
+terra Layer:get_y() return self.y end
+terra Layer:get_w() return self.w end
+terra Layer:get_h() return self.h end
+
+terra Layer:set_x(v: num) self.x = v end
+terra Layer:set_y(v: num) self.y = v end
+terra Layer:set_w(v: num) self.w = v end
+terra Layer:set_h(v: num) self.h = v end
+
+terra Layer:get_min_cw() return self.min_cw end
+terra Layer:get_min_ch() return self.min_cw end
+
+terra Layer:set_min_cw(v: num) self.min_cw = v end
+terra Layer:set_min_ch(v: num) self.min_ch = v end
+
+--borders
+
+terra Layer:get_newborder()
+	if self.border == &default_border then
+		self.border = self.manager.borders:alloc()
+		self.border:init()
+	end
+	return self.border
+end
+
+terra Layer:get_border_left   () return self.border.left   end
+terra Layer:get_border_right  () return self.border.right  end
+terra Layer:get_border_top    () return self.border.top    end
+terra Layer:get_border_bottom () return self.border.bottom end
+
+terra Layer:set_border_left   (v: num) self.newborder.left   = v end
+terra Layer:set_border_right  (v: num) self.newborder.right  = v end
+terra Layer:set_border_top    (v: num) self.newborder.top    = v end
+terra Layer:set_border_bottom (v: num) self.newborder.bottom = v end
+
+terra Layer:get_corner_radius_top_left     () return self.border.corner_radius_top_left     end
+terra Layer:get_corner_radius_top_right    () return self.border.corner_radius_top_right    end
+terra Layer:get_corner_radius_bottom_left  () return self.border.corner_radius_bottom_left  end
+terra Layer:get_corner_radius_bottom_right () return self.border.corner_radius_bottom_right end
+terra Layer:get_corner_radius_kappa        () return self.border.corner_radius_kappa        end
+
+terra Layer:set_corner_radius_top_left     (v: num) self.newborder.corner_radius_top_left     = v end
+terra Layer:set_corner_radius_top_right    (v: num) self.newborder.corner_radius_top_right    = v end
+terra Layer:set_corner_radius_bottom_left  (v: num) self.newborder.corner_radius_bottom_left  = v end
+terra Layer:set_corner_radius_bottom_right (v: num) self.newborder.corner_radius_bottom_right = v end
+terra Layer:set_corner_radius_kappa        (v: num) self.newborder.corner_radius_kappa        = v end
+
+terra Layer:get_border_color_left   () return self.border.color_left   .uint end
+terra Layer:get_border_color_right  () return self.border.color_right  .uint end
+terra Layer:get_border_color_top    () return self.border.color_top    .uint end
+terra Layer:get_border_color_bottom () return self.border.color_bottom .uint end
+
+terra Layer:set_border_color_left   (v: uint32) self.newborder.color_left   .uint = v end
+terra Layer:set_border_color_right  (v: uint32) self.newborder.color_right  .uint = v end
+terra Layer:set_border_color_top    (v: uint32) self.newborder.color_top    .uint = v end
+terra Layer:set_border_color_bottom (v: uint32) self.newborder.color_bottom .uint = v end
+
+terra Layer:get_border_dash_count() return self.border.dash.len end
+terra Layer:get_border_dashes() return self.border.dash.elements end
+terra Layer:set_border_dashes(dashes: &double, len: int)
+	self.newborder.dash:clear()
+	self.border.dash:extend(dashes, len)
+end
+terra Layer:get_border_dash_offset() return self.border.dash_offset end
+terra Layer:set_border_dash_offset(v: int) self.newborder.dash_offset = v end
+
+terra Layer:set_border_line_to(line_to: BorderLineToFunc) self.newborder.line_to = line_to end
+
+--backgrounds
+do end --fix for "function or expression too complex"
+
+terra Layer:get_newbackground()
+	if self.background == &default_background then
+		self.background = self.manager.backgrounds:alloc()
+		self.background:init()
+	end
+	free(self.background._pattern)
+	return self.background
+end
+
+terra Layer:get_background_type() return self.background.type end
+terra Layer:set_background_type(v: enum) self.newbackground.type = v end
+
+terra Layer:get_background_color() return self.background.color.uint end
+terra Layer:set_background_color(v: uint) self.newbackground.newcolor.uint = v end
+
+terra Layer:get_background_gradient_type() return self.background.gradient.type end
+terra Layer:set_background_gradient_type(v: enum) self.newbackground.newgradient.type = v end
+
+terra Layer:get_background_gradient_x1() return self.background.gradient.points.x1 end
+terra Layer:get_background_gradient_y1() return self.background.gradient.points.y1 end
+terra Layer:get_background_gradient_x2() return self.background.gradient.points.x2 end
+terra Layer:get_background_gradient_y2() return self.background.gradient.points.y2 end
+
+terra Layer:set_background_gradient_x1(x1: num) self.newbackground.newgradient.newpoints.x1 = x1 end
+terra Layer:set_background_gradient_y1(y1: num) self.newbackground.newgradient.newpoints.y1 = y1 end
+terra Layer:set_background_gradient_x2(x2: num) self.newbackground.newgradient.newpoints.x2 = x2 end
+terra Layer:set_background_gradient_y2(y2: num) self.newbackground.newgradient.newpoints.y2 = y2 end
+
+terra Layer:get_background_gradient_cx1() return self.background.gradient.circles.cx1 end
+terra Layer:get_background_gradient_cy1() return self.background.gradient.circles.cy1 end
+terra Layer:get_background_gradient_cx2() return self.background.gradient.circles.cx2 end
+terra Layer:get_background_gradient_cy2() return self.background.gradient.circles.cy2 end
+terra Layer:get_background_gradient_r1 () return self.background.gradient.circles.r1  end
+terra Layer:get_background_gradient_r2 () return self.background.gradient.circles.r2  end
+
+terra Layer:set_background_gradient_cx1(cx1: num) self.newbackground.newgradient.newcircles.cx1 = cx1 end
+terra Layer:set_background_gradient_cy1(cy1: num) self.newbackground.newgradient.newcircles.cy1 = cy1 end
+terra Layer:set_background_gradient_cx2(cx2: num) self.newbackground.newgradient.newcircles.cx2 = cx2 end
+terra Layer:set_background_gradient_cy2(cy2: num) self.newbackground.newgradient.newcircles.cy2 = cy2 end
+terra Layer:set_background_gradient_r1 (r1 : num) self.newbackground.newgradient.newcircles.r1  = r1  end
+terra Layer:set_background_gradient_r2 (r2 : num) self.newbackground.newgradient.newcircles.r2  = r2  end
+
+terra Layer:get_background_gradient_color_stop_count() return self.background.gradient.color_stops.len end
+terra Layer:get_background_gradient_color_stops(color_stops: &ColorStop)
+	return self.background.gradient.color_stops.elements
+end
+terra Layer:set_background_gradient_color_stops(color_stops: &ColorStop, len: int)
+	var cs = self.newbackground.newgradient.color_stops
+	cs:clear()
+	cs:extend(color_stops, len)
+end
+
+terra Layer:get_background_image() return self.background.image end
+terra Layer:set_background_image(v: &Bitmap) @self.newbackground.newimage = @v end
+
+terra Layer:get_background_hittable    () return self.background.hittable end
+terra Layer:get_background_clip_border_offset() return self.background.clip_border_offset end
+terra Layer:get_background_operator    () return self.background.operator end
+terra Layer:get_background_x           () return self.background.x end
+terra Layer:get_background_y           () return self.background.y end
+terra Layer:get_background_rotation    () return self.background.rotation end
+terra Layer:get_background_rotation_cx () return self.background.rotation_cx end
+terra Layer:get_background_rotation_cy () return self.background.rotation_cy end
+terra Layer:get_background_scale       () return self.background.scale end
+terra Layer:get_background_scale_cx    () return self.background.scale_cx end
+terra Layer:get_background_scale_cy    () return self.background.scale_cy end
+terra Layer:get_background_extend      () return self.background.extend end
+
+terra Layer:set_background_hittable    (v: bool) self.newbackground.hittable = v end
+terra Layer:set_background_clip_border_offset(v: num) self.newbackground.clip_border_offset = v end
+terra Layer:set_background_operator    (v: enum) self.newbackground.operator = v end
+terra Layer:set_background_x           (v: num)  self.newbackground.x = v end
+terra Layer:set_background_y           (v: num)  self.newbackground.y = v end
+terra Layer:set_background_rotation    (v: num)  self.newbackground.rotation = v end
+terra Layer:set_background_rotation_cx (v: num)  self.newbackground.rotation_cx = v end
+terra Layer:set_background_rotation_cy (v: num)  self.newbackground.rotation_cy = v end
+terra Layer:set_background_scale       (v: num)  self.newbackground.scale = v end
+terra Layer:set_background_scale_cx    (v: num)  self.newbackground.scale_cx = v end
+terra Layer:set_background_scale_cy    (v: num)  self.newbackground.scale_cy = v end
+terra Layer:set_background_extend      (v: enum) self.newbackground.extend = v end
+
+function build(self)
+	local public = publish'layerlib'
+
+	local struct color_stop_t {
+		offset: num;
+		color: uint32;
+	}
+	public(color_stop_t)
+
+	public(layer_manager)
+
+	public(Layer, {
+		free=1,
+		draw=1,
+
+		--position in hierarchy
+
+		get_parent=1,
+		get_index=1,
+		layer_at=1,
+		layer_count=1,
+		layer_insert=1,
+		layer_remove=1,
+		layer_move=1,
+		move=1,
+
+		--size and position
+
+		get_x=1,
+		get_y=1,
+		get_w=1,
+		get_h=1,
+		set_x=1,
+		set_y=1,
+		set_w=1,
+		set_h=1,
+
+		get_cx=1,
+		get_cy=1,
+		get_cw=1,
+		get_ch=1,
+		set_cx=1,
+		set_cy=1,
+		set_cw=1,
+		set_ch=1,
+
+		get_min_cw=1,
+		get_min_ch=1,
+		set_min_cw=1,
+		set_min_ch=1,
+
+		to_parent=1, from_parent=1,
+		to_window=1, from_window=1,
+
+		--borders
+
+		get_border_left   =1,
+		get_border_right  =1,
+		get_border_top    =1,
+		get_border_bottom =1,
+		set_border_left   =1,
+		set_border_right  =1,
+		set_border_top    =1,
+		set_border_bottom =1,
+
+		get_corner_radius_top_left     =1,
+		get_corner_radius_top_right    =1,
+		get_corner_radius_bottom_left  =1,
+		get_corner_radius_bottom_right =1,
+		get_corner_radius_kappa        =1,
+		set_corner_radius_top_left     =1,
+		set_corner_radius_top_right    =1,
+		set_corner_radius_bottom_left  =1,
+		set_corner_radius_bottom_right =1,
+		set_corner_radius_kappa        =1,
+
+		get_border_color_left   =1,
+		get_border_color_right  =1,
+		get_border_color_top    =1,
+		get_border_color_bottom =1,
+		set_border_color_left   =1,
+		set_border_color_right  =1,
+		set_border_color_top    =1,
+		set_border_color_bottom =1,
+
+		get_border_dash_count=1,
+		get_border_dashes=1,
+		set_border_dashes=1,
+		get_border_dash_offset=1,
+		set_border_dash_offset=1,
+
+		set_border_line_to=1,
+
+		--backgrounds
+
+		get_background_type=1,
+		set_background_type=1,
+
+		get_background_color=1,
+		set_background_color=1,
+
+		get_background_gradient_type=1,
+		set_background_gradient_type=1,
+
+		get_background_gradient_x1=1,
+		get_background_gradient_y1=1,
+		get_background_gradient_x2=1,
+		get_background_gradient_y2=1,
+
+		set_background_gradient_x1=1,
+		set_background_gradient_y1=1,
+		set_background_gradient_x2=1,
+		set_background_gradient_y2=1,
+
+		get_background_gradient_cx1=1,
+		get_background_gradient_cy1=1,
+		get_background_gradient_cx2=1,
+		get_background_gradient_cy2=1,
+		get_background_gradient_r1 =1,
+		get_background_gradient_r2 =1,
+
+		set_background_gradient_cx1=1,
+		set_background_gradient_cy1=1,
+		set_background_gradient_cx2=1,
+		set_background_gradient_cy2=1,
+		set_background_gradient_r1 =1,
+		set_background_gradient_r2 =1,
+
+		get_background_gradient_color_stop_count=1,
+		get_background_gradient_color_stops=1,
+		set_background_gradient_color_stops=1,
+
+		get_background_image=1,
+		set_background_image=1,
+
+	}, true)
+
+	public(LayerManager, {
+		layer=1,
+		free=1,
+	}, true)
+
+	public:getenums(layerlib)
+
+	public:build{
+		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak', 'boxblur'},
+	}
 end
 
 if not ... then
