@@ -1008,7 +1008,7 @@ terra LayerBackground:get_pattern()
 				self._pattern = cairo_pattern_create_radial(c.cx1, c.cy1, c.r1, c.cx2, c.cy2, c.r2)
 			end
 			for _,c in g.color_stops do
-				self._pattern:add_color_stop_rgba(c.offset, unpackstruct(c.color.channels))
+				self._pattern:add_color_stop_rgba(c.offset, c.color)
 			end
 		elseif self.type == BACKGROUND_TYPE_IMAGE then
 			self._pattern = cairo_pattern_create_for_surface(self._image:surface())
@@ -2920,12 +2920,10 @@ terra Layer:set_border_color_right  (v: uint32) self.newborder.color_right  .uin
 terra Layer:set_border_color_top    (v: uint32) self.newborder.color_top    .uint = v end
 terra Layer:set_border_color_bottom (v: uint32) self.newborder.color_bottom .uint = v end
 
-terra Layer:get_border_dash_count() return self.border.dash.len end
-terra Layer:get_border_dashes() return self.border.dash.elements end
-terra Layer:set_border_dashes(dashes: &double, len: int)
-	self.newborder.dash:clear()
-	self.border.dash:extend(dashes, len)
-end
+terra Layer:border_dashes_count() return self.border.dash.len end
+terra Layer:border_dashes_clear() self.border.dash:clear() end
+terra Layer:border_dashes_get(i: int) self.newborder.dash(i) end
+terra Layer:border_dashes_set(i: int, dash: num) self.newborder.dash:set(i, dash) end
 terra Layer:get_border_dash_offset() return self.border.dash_offset end
 terra Layer:set_border_dash_offset(v: int) self.newborder.dash_offset = v end
 
@@ -2976,14 +2974,25 @@ terra Layer:set_background_gradient_cy2(cy2: num) self.newbackground.newgradient
 terra Layer:set_background_gradient_r1 (r1 : num) self.newbackground.newgradient.newcircles.r1  = r1  end
 terra Layer:set_background_gradient_r2 (r2 : num) self.newbackground.newgradient.newcircles.r2  = r2  end
 
-terra Layer:get_background_gradient_color_stop_count() return self.background.gradient.color_stops.len end
-terra Layer:get_background_gradient_color_stops(color_stops: &ColorStop)
-	return self.background.gradient.color_stops.elements
+terra Layer:background_gradient_color_stops_count()
+	return self.background.gradient.color_stops.len
 end
-terra Layer:set_background_gradient_color_stops(color_stops: &ColorStop, len: int)
-	var cs = self.newbackground.newgradient.color_stops
-	cs:clear()
-	cs:extend(color_stops, len)
+terra Layer:background_gradient_color_stops_clear()
+	self.background.gradient.color_stops:clear()
+end
+terra Layer:background_gradient_color_stops_color_get(i: int)
+	var cs = self.background.gradient.color_stops:at(i); assert(cs ~= nil)
+	return cs.color.uint
+end
+terra Layer:background_gradient_color_stops_offset_get(i: int)
+	var cs = self.background.gradient.color_stops:at(i); assert(cs ~= nil)
+	return cs.offset
+end
+terra Layer:background_gradient_color_stops_color_set(i: int, color: uint32)
+	self.newbackground.newgradient.color_stops:set(i).color.uint = color
+end
+terra Layer:background_gradient_color_stops_offset_set(i: int, offset: num)
+	self.newbackground.newgradient.color_stops:set(i).offset = offset
 end
 
 terra Layer:get_background_image() return self.background.image end
@@ -3017,12 +3026,6 @@ terra Layer:set_background_extend      (v: enum) self.newbackground.extend = v e
 
 function build(self)
 	local public = publish'layerlib'
-
-	local struct color_stop_t {
-		offset: num;
-		color: uint32;
-	}
-	public(color_stop_t)
 
 	public(layer_manager)
 
@@ -3100,9 +3103,10 @@ function build(self)
 		set_border_color_top    =1,
 		set_border_color_bottom =1,
 
-		get_border_dash_count=1,
-		get_border_dashes=1,
-		set_border_dashes=1,
+		border_dashes_count=1,
+		border_dashes_clear=1,
+		border_dashes_get=1,
+		border_dashes_set=1,
 		get_border_dash_offset=1,
 		set_border_dash_offset=1,
 
@@ -3143,12 +3147,41 @@ function build(self)
 		set_background_gradient_r1 =1,
 		set_background_gradient_r2 =1,
 
-		get_background_gradient_color_stop_count=1,
-		get_background_gradient_color_stops=1,
-		set_background_gradient_color_stops=1,
+		background_gradient_color_stops_count=1,
+		background_gradient_color_stops_clear=1,
+		background_gradient_color_stops_color_get=1,
+		background_gradient_color_stops_color_set=1,
+		background_gradient_color_stops_offset_get=1,
+		background_gradient_color_stops_offset_set=1,
 
 		get_background_image=1,
 		set_background_image=1,
+
+		get_background_hittable    =1,
+		get_background_clip_border_offset=1,
+		get_background_operator    =1,
+		get_background_x           =1,
+		get_background_y           =1,
+		get_background_rotation    =1,
+		get_background_rotation_cx =1,
+		get_background_rotation_cy =1,
+		get_background_scale       =1,
+		get_background_scale_cx    =1,
+		get_background_scale_cy    =1,
+		get_background_extend      =1,
+
+		set_background_hittable    =1,
+		set_background_clip_border_offset=1,
+		set_background_operator    =1,
+		set_background_x           =1,
+		set_background_y           =1,
+		set_background_rotation    =1,
+		set_background_rotation_cx =1,
+		set_background_rotation_cy =1,
+		set_background_scale       =1,
+		set_background_scale_cx    =1,
+		set_background_scale_cy    =1,
+		set_background_extend      =1,
 
 	}, true)
 
