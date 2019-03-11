@@ -2,6 +2,9 @@
 local layerlib = {__index = require'low'}
 setfenv(1, setmetatable(layerlib, layerlib))
 require'cairolib'
+struct LayerText;
+local tr = require'trlib_env'
+struct tr.TextRunState { t: &LayerText; }
 require'trlib_paint_cairo'
 local tr = require'trlib'
 local boxblur = require'boxblurlib'
@@ -54,7 +57,7 @@ struct Layer;
 BorderLineToFunc = {&Layer, &cairo_t, num, num, num} -> {}
 BorderLineToFunc.__typename_ffi = 'BorderLineToFunc'
 
-struct LayerBorder {
+struct LayerBorder (gettersandsetters) {
 	left   : num;
 	right  : num;
 	top    : num;
@@ -80,7 +83,6 @@ struct LayerBorder {
 
 	line_to: BorderLineToFunc;
 }
-gettersandsetters(LayerBorder)
 
 local default_border = constant(`LayerBorder {
 	left = 0;
@@ -133,7 +135,7 @@ struct RadialGradientCircles {
 GRADIENT_TYPE_LINEAR = 1
 GRADIENT_TYPE_RADIAL = 2
 
-struct Gradient {
+struct Gradient (gettersandsetters) {
 	_type: enum; --GRADIENT_TYPE_*
 	color_stops: arr(ColorStop);
 	union {
@@ -141,7 +143,6 @@ struct Gradient {
 		_circles: RadialGradientCircles;
 	}
 }
-gettersandsetters(Gradient)
 
 terra Gradient:get_type()
 	return self._type
@@ -196,7 +197,7 @@ BACKGROUND_EXTEND_NO      = 0
 BACKGROUND_EXTEND_REPEAT  = 1
 BACKGROUND_EXTEND_REFLECT = 2
 
-struct LayerBackground {
+struct LayerBackground (gettersandsetters) {
 	_type: enum; --BACKGROUND_TYPE_*
 	union {
 		_color: color;
@@ -224,7 +225,6 @@ struct LayerBackground {
 
 	extend: enum; --BACKGROUND_EXTEND_*
 }
-gettersandsetters(LayerBackground)
 
 local default_background = constant(`LayerBackground {
 	_type = BACKGROUND_TYPE_NONE;
@@ -249,30 +249,7 @@ local default_background = constant(`LayerBackground {
 	extend = BACKGROUND_EXTEND_REPEAT;
 })
 
-struct ShadowValidKeyRoundRect {
-	x: num; y: num;
-	w: num; h: num;
-	r1x: num; r1y: num;
-	r2x: num; r2y: num;
-	r3x: num; r3y: num;
-	r4x: num; r4y: num;
-	k: num;
-}
-terra ShadowValidKeyRoundRect:equal(other: &ShadowValidKeyRoundRect)
-	return equal(self, other)
-end
-
-struct ShadowValidKey {
-	blur  : uint8;
-	passes: uint8;
-	union {
-		rr: ShadowValidKeyRoundRect;
-		path: cairo_path_t;
-	}
-}
-
 struct ShadowState {
-	key: ShadowValidKey;
 	blur: boxblur.Blur;
 	blurred_surface: &cairo_surface_t;
 	x: num; y: num;
@@ -289,13 +266,20 @@ struct LayerShadow {
 
 local default_shadow = constant(`LayerShadow {
 	x = 0.0; y = 0.0; blur = 0; passes = 0;
+	_state = ShadowState{blurred_surface = nil};
 })
+
+struct LayerFont (gettersandsetters) {
+	f: tr.Font;
+}
 
 struct LayerText {
 	runs: tr.TextRuns;
 	align_x: enum; --ALIGN_*
 	align_y: enum; --ALIGN_*
 	segments: tr.Segs;
+	shaped: bool;
+	wrapped: bool;
 	caret_width: num;
 	caret_color: color;
 	caret_insert_mode: bool;
@@ -303,17 +287,15 @@ struct LayerText {
 	selection: tr.Selection;
 }
 
-terra LayerText:init()
-	self.align_x = ALIGN_CENTER
-	self.align_y = ALIGN_CENTER
-	self.caret_width = 1.0
-	self.caret_color = color {0xffffffff}
-end
-
-terra LayerText:free()
-	self.segments:free()
-	self.runs:free()
-end
+--NOTE: segments not initialized here.
+local default_text = constant(`LayerText {
+	runs = tr.TextRuns(nil);
+	align_x = ALIGN_CENTER;
+	align_y = ALIGN_CENTER;
+	caret_width = 1;
+	caret_color = color {0xffffffff};
+	selectable = true;
+})
 
 struct LayoutSolver {
 	type       : enum; --LAYOUT_*
@@ -325,7 +307,11 @@ struct LayoutSolver {
 	sync_min_h : {&Layer, bool} -> num;
 	sync_x     : {&Layer, bool} -> bool;
 	sync_y     : {&Layer, bool} -> bool;
+	sync_top   : {&Layer, num, num} -> {};
 }
+
+FLEX_FLOW_X = 1
+FLEX_FLOW_Y = 2
 
 struct FlexboxLayout {
 	--common to flexbox & grid
@@ -340,11 +326,18 @@ struct FlexboxLayout {
 	__reserved: uint8[2]; --to appease the freelist
 }
 
+local default_flexbox_layout = constant(`FlexboxLayout {
+	align_items_x = ALIGN_STRETCH;
+	align_items_y = ALIGN_STRETCH;
+	item_align_x  = ALIGN_STRETCH;
+	item_align_y  = ALIGN_STRETCH;
+
+	flow = FLEX_FLOW_X;
+	wrap = false;
+})
+
 terra FlexboxLayout:init()
-	self.align_items_x = ALIGN_STRETCH
-	self.align_items_y = ALIGN_STRETCH
-	self.item_align_x  = ALIGN_STRETCH
-	self.item_align_y  = ALIGN_STRETCH
+	@self = default_flexbox_layout
 end
 
 terra FlexboxLayout:free() end
@@ -411,37 +404,12 @@ struct LayerManager {
 	backgrounds     : freelist(LayerBackground);
 	shadows         : freelist(LayerShadow);
 	texts           : freelist(LayerText);
+	fonts           : freelist(LayerFont);
 	flexbox_layouts : freelist(FlexboxLayout);
 	grid_layouts    : freelist(GridLayout);
-
-	--
 }
 
-terra LayerManager:init()
-	self.tr              :init()
-	self.grid_occupied   :init()
-	self.layers          :init()
-	self.borders         :init()
-	self.backgrounds     :init()
-	self.shadows         :init()
-	self.texts           :init()
-	self.flexbox_layouts :init()
-	self.grid_layouts    :init()
-end
-
-terra LayerManager:free()
-	self.backgrounds     :free()
-	self.shadows         :free()
-	self.texts           :free()
-	self.flexbox_layouts :free()
-	self.grid_layouts    :free()
-	self.borders         :free()
-	self.layers          :free()
-	self.grid_occupied   :free()
-	self.tr              :free()
-end
-
-struct Layer {
+struct Layer (gettersandsetters) {
 
 	manager: &LayerManager;
 
@@ -516,7 +484,6 @@ struct Layer {
 	_grid_col_span: int;
 
 }
-gettersandsetters(Layer)
 
 --utils ----------------------------------------------------------------------
 
@@ -1086,34 +1053,6 @@ terra Layer:shadow_path(cr: &cairo_t)
 	end
 end
 
-terra Layer:shadow_valid_key()
-	var sk: ShadowValidKey; fill(&sk)
-	sk.blur   = self.shadow.blur
-	sk.passes = self.shadow.passes
-	if self.border.line_to == nil then
-		var rr = sk.rr
-		rr.x, rr.y, rr.w, rr.h,
-		rr.r1x, rr.r1y, rr.r2x, rr.r2y, rr.r3x, rr.r3y, rr.r4x, rr.r4y,
-		rr.k = self:shadow_round_rect()
-	else
-		--TODO: store the shadow path instead
-	end
-	return sk
-end
-
-terra Layer:shadow_valid()
-	var sk1 = self:shadow_valid_key()
-	var sk0 = &self.shadow._state.key
-	var valid =
-		    sk1.blur   == sk0.blur
-		and sk1.passes == sk0.passes
-		and iif(self.border.line_to == nil,
-			sk1.rr  :equal(&sk0.rr),
-			sk1.path:equal(&sk0.path))
-	@sk0 = sk1
-	return valid
-end
-
 terra Layer:repaint_shadow(bmp: &Bitmap)
 	var sr = bmp:surface(); defer sr:free()
 	var cr = sr:context(); defer cr:free()
@@ -1131,7 +1070,7 @@ terra Layer:draw_shadow(cr: &cairo_t)
 	var bx, by, bw, bh = self:shadow_bitmap_rect()
 	self.shadow._state.x = bx
 	self.shadow._state.y = by
-	if not self:shadow_valid() then
+	if self.shadow._state.blurred_surface == nil then
 		var bmp = self.shadow._state.blur:blur(
 			bw, bh, self.shadow.blur, self.shadow.passes)
 		free(self.shadow._state.blurred_surface)
@@ -1148,13 +1087,17 @@ end
 terra LayerShadow:init(layer: &Layer)
 	self._state.blur:init(
 		boxblur.BITMAP_FORMAT_G8,
-		[boxblur.RepaintFunc]([Layer.methods.repaint_shadow]),
+		[boxblur.RepaintFunc]([Layer:getmethod'repaint_shadow']),
 		self)
 end
 
 terra LayerShadow:free()
 	free(self._state.blurred_surface)
 	self._state.blur:free()
+end
+
+terra LayerShadow:invalidate()
+	free(self._state.blurred_surface)
 end
 
 --content-box geometry, drawing and hit testing ------------------------------
@@ -1203,18 +1146,35 @@ end
 
 --text geometry & drawing ----------------------------------------------------
 
+terra LayerText:init(layer: &Layer)
+	@self = default_text
+	self.segments:init(&layer.manager.tr)
+end
+
+terra LayerText:free()
+	self.segments:free()
+	self.runs:free()
+end
+
 terra Layer:text_visible()
-	return self.text ~= nil
+	return self.text.runs.array.len > 0
+		and self.text.runs.array:at(0).font ~= nil
+		and self.text.runs.array:at(0).font_size > 0
+		and self.text.runs.text.len > 0
 end
 
 terra Layer:sync_text_shape()
 	if not self:text_visible() then return false end
+	if self.text.shaped then return true end
 	self.manager.tr:shape(&self.text.runs, &self.text.segments)
+	self.text.shaped = true
 	return true
 end
 
 terra Layer:sync_text_wrap()
+	if self.text.wrapped then return end
 	self.text.segments:wrap(self.cw)
+	self.text.wrapped = true
 end
 
 terra Layer:sync_text_align()
@@ -1404,11 +1364,16 @@ LAYOUT_FLEXBOX = 2
 LAYOUT_GRID    = 3
 
 --layout interface forwarders
-terra Layer:sync_layout()          return self.layout.sync(self) end
+terra Layer:sync_layout()          self.layout.sync(self) end
 terra Layer:sync_min_w(b: bool)    return self.layout.sync_min_w(self, b) end
 terra Layer:sync_min_h(b: bool)    return self.layout.sync_min_h(self, b) end
 terra Layer:sync_layout_x(b: bool) return self.layout.sync_x(self, b) end
 terra Layer:sync_layout_y(b: bool) return self.layout.sync_y(self, b) end
+
+terra Layer:sync(w: num, h: num)
+	self.layout.sync_top(self, w, h)
+	self:sync_layout()
+end
 
 --layout utils ---------------------------------------------------------------
 
@@ -1489,6 +1454,11 @@ local terra null_sync_x(self: &Layer, other_axis_synced: bool)
 	return true
 end
 
+local terra null_sync_top(self: &Layer, w: num, h: num)
+	self.w = w
+	self.h = h
+end
+
 local null_layout = constant(`LayoutSolver {
 	type       = LAYOUT_NULL;
 	axis_order = 0;
@@ -1499,7 +1469,13 @@ local null_layout = constant(`LayoutSolver {
 	sync_min_h = null_sync_min_h;
 	sync_x     = null_sync_x;
 	sync_y     = null_sync_x;
+	sync_top   = null_sync_top;
 })
+
+local terra sync_top(self: &Layer, w: num, h: num) --for all other layout types
+	self.min_cw = w - self.pw
+	self.min_ch = h - self.ph
+end
 
 --textbox layout -------------------------------------------------------------
 
@@ -1573,6 +1549,7 @@ local textbox_layout = constant(`LayoutSolver {
 	sync_min_h = textbox_sync_min_h;
 	sync_x     = textbox_sync_x;
 	sync_y     = textbox_sync_x;
+	sync_top   = sync_top;
 })
 
 --stuff common to flexbox & grid layouts -------------------------------------
@@ -1769,9 +1746,6 @@ local function align_items_main_axis_func(T, W)
 end
 
 --flexbox layout -------------------------------------------------------------
-
-FLEX_FLOW_X = 1
-FLEX_FLOW_Y = 2
 
 --generate pairs of methods for vertical and horizontal flexbox layouts.
 local function gen_funcs(X, Y, W, H)
@@ -2149,11 +2123,11 @@ local terra flexbox_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-terra flexbox_init(self: &Layer)
+local terra flexbox_init(self: &Layer)
 	self.flex:init()
 end
 
-terra flexbox_free(self: &Layer)
+local terra flexbox_free(self: &Layer)
 	self.flex:free()
 end
 
@@ -2167,6 +2141,7 @@ local flexbox_layout = constant(`LayoutSolver {
 	sync_min_h = flexbox_sync_min_h;
 	sync_x     = flexbox_sync_x;
 	sync_y     = flexbox_sync_x;
+	sync_top   = sync_top;
 })
 
 --[[
@@ -2221,7 +2196,7 @@ terra BoolBitmap:widen(min_rows: int, min_cols: int)
 	while rows < min_rows do rows = rows * 2 end
 	while cols < min_cols do cols = cols * 2 end
 	if rows > self.rows or cols > self.cols then
-		assert(self.bits:resize(rows * cols))
+		self.bits.len = rows * cols
 		if cols > self.cols then --move the rows down to widen them
 			for row = self.rows-1, -1, -1 do
 				copy(
@@ -2526,7 +2501,7 @@ local function gen_funcs(X, Y, W, H, COL)
 
 		--create pseudo-layers to apply flexbox stretching to.
 		var cols = self.grid.[_COLS]
-		assert(cols:resize(max_col))
+		cols.len = max_col
 
 		for col = 0, max_col do
 			cols:set(col, GridLayoutCol{
@@ -2719,6 +2694,7 @@ local grid_layout = constant(`LayoutSolver {
 	sync_min_h = grid_sync_min_h;
 	sync_x     = grid_sync_x;
 	sync_y     = grid_sync_x;
+	sync_top   = sync_top;
 })
 
 --layout plugin vtable -------------------------------------------------------
@@ -2757,8 +2733,9 @@ terra Layer:init(manager: &LayerManager)
 	self.snap_y = true
 
 	self.background = &default_background
-	self.border = &default_border
-	self.shadow = &default_shadow
+	self.border     = &default_border
+	self.shadow     = &default_shadow
+	self.text       = &default_text
 
 	self.visible = true
 	self.opacity = 1
@@ -2787,31 +2764,53 @@ terra Layer:free(): {}
 		self.shadow = &default_shadow
 	end
 
-	if self.text ~= nil then
+	if self.text ~= &default_text then
 		self.text:free()
 		self.manager.texts:release(self.text)
-		self.text = nil
+		self.text = &default_text
 	end
 
 	self.layout_type = LAYOUT_NULL
 	if self.parent ~= nil then
-		self.parent.children:remove_at(self)
+		self.parent.children:remove(self)
 	else
-		self.manager:_free_layer(self)
+		self.manager.layers:release(self)
 	end
 end
 
 --layer manager --------------------------------------------------------------
+
+terra LayerManager:init()
+	self.layers          :init()
+	self.borders         :init()
+	self.backgrounds     :init()
+	self.shadows         :init()
+	self.tr              :init()
+	self.texts           :init()
+	self.fonts           :init()
+	self.flexbox_layouts :init()
+	self.grid_layouts    :init()
+	self.grid_occupied   :init()
+end
+
+terra LayerManager:free()
+	self.layers:free()
+	self.borders         :free()
+	self.backgrounds     :free()
+	self.shadows         :free()
+	self.tr              :free()
+	self.texts           :free()
+	self.fonts           :free()
+	self.flexbox_layouts :free()
+	self.grid_layouts    :free()
+	self.grid_occupied   :free()
+end
 
 terra LayerManager:layer()
 	var e = self.layers:alloc()
 	assert(e ~= nil)
 	e:init(self)
 	return e
-end
-
-terra LayerManager:_free_layer(layer: &Layer)
-	self.layers:release(layer)
 end
 
 terra layer_manager()
@@ -2824,14 +2823,13 @@ end
 --child layer management
 
 terra Layer:get_parent() return self.parent end
-terra Layer:get_index(): int return self.parent.children:index_at(self) end
+terra Layer:get_index(): int return self.parent.children:index(self) end
 
-terra Layer:layer_at(i: int) return self.children:at(i) end
-terra Layer:layer_count() return self.children.len end
+terra Layer:layer(i: int) return self.children:at(i) end
+terra Layer:get_layer_count() return self.children.len end
 
 terra Layer:layer_insert(i: int)
-	var i = self.children:insert_junk(i, 1); assert(i ~= -1)
-	var e = self.children:at(i)
+	var e = self.children:add()
 	e:init(self.manager)
 	e.parent = self
 	return e
@@ -2853,9 +2851,9 @@ terra Layer:move(parent: &Layer, i: int)
 	@e1 = @self
 	e1.parent = parent
 	if self.parent ~= nil then
-		self.parent.children:remove_at(self)
+		self.parent.children:remove(self)
 	else
-		self.manager:_free_layer(self)
+		self.manager.layers:release(self)
 	end
 	return e1
 end
@@ -2869,8 +2867,8 @@ terra Layer:get_h() return self.h end
 
 terra Layer:set_x(v: num) self.x = v end
 terra Layer:set_y(v: num) self.y = v end
-terra Layer:set_w(v: num) self.w = v end
-terra Layer:set_h(v: num) self.h = v end
+terra Layer:set_w(v: num) self.w = v; self.shadow:invalidate() end
+terra Layer:set_h(v: num) self.h = v; self.shadow:invalidate() end
 
 terra Layer:get_min_cw() return self.min_cw end
 terra Layer:get_min_ch() return self.min_cw end
@@ -2878,7 +2876,7 @@ terra Layer:get_min_ch() return self.min_cw end
 terra Layer:set_min_cw(v: num) self.min_cw = v end
 terra Layer:set_min_ch(v: num) self.min_ch = v end
 
---borders
+do end --borders (and fix for terra issue #358)
 
 terra Layer:get_newborder()
 	if self.border == &default_border then
@@ -2893,10 +2891,10 @@ terra Layer:get_border_right  () return self.border.right  end
 terra Layer:get_border_top    () return self.border.top    end
 terra Layer:get_border_bottom () return self.border.bottom end
 
-terra Layer:set_border_left   (v: num) self.newborder.left   = v end
-terra Layer:set_border_right  (v: num) self.newborder.right  = v end
-terra Layer:set_border_top    (v: num) self.newborder.top    = v end
-terra Layer:set_border_bottom (v: num) self.newborder.bottom = v end
+terra Layer:set_border_left   (v: num) self.newborder.left   = v; self.shadow:invalidate() end
+terra Layer:set_border_right  (v: num) self.newborder.right  = v; self.shadow:invalidate() end
+terra Layer:set_border_top    (v: num) self.newborder.top    = v; self.shadow:invalidate() end
+terra Layer:set_border_bottom (v: num) self.newborder.bottom = v; self.shadow:invalidate() end
 
 terra Layer:get_corner_radius_top_left     () return self.border.corner_radius_top_left     end
 terra Layer:get_corner_radius_top_right    () return self.border.corner_radius_top_right    end
@@ -2904,11 +2902,11 @@ terra Layer:get_corner_radius_bottom_left  () return self.border.corner_radius_b
 terra Layer:get_corner_radius_bottom_right () return self.border.corner_radius_bottom_right end
 terra Layer:get_corner_radius_kappa        () return self.border.corner_radius_kappa        end
 
-terra Layer:set_corner_radius_top_left     (v: num) self.newborder.corner_radius_top_left     = v end
-terra Layer:set_corner_radius_top_right    (v: num) self.newborder.corner_radius_top_right    = v end
-terra Layer:set_corner_radius_bottom_left  (v: num) self.newborder.corner_radius_bottom_left  = v end
-terra Layer:set_corner_radius_bottom_right (v: num) self.newborder.corner_radius_bottom_right = v end
-terra Layer:set_corner_radius_kappa        (v: num) self.newborder.corner_radius_kappa        = v end
+terra Layer:set_corner_radius_top_left     (v: num) self.newborder.corner_radius_top_left     = v; self.shadow:invalidate() end
+terra Layer:set_corner_radius_top_right    (v: num) self.newborder.corner_radius_top_right    = v; self.shadow:invalidate() end
+terra Layer:set_corner_radius_bottom_left  (v: num) self.newborder.corner_radius_bottom_left  = v; self.shadow:invalidate() end
+terra Layer:set_corner_radius_bottom_right (v: num) self.newborder.corner_radius_bottom_right = v; self.shadow:invalidate() end
+terra Layer:set_corner_radius_kappa        (v: num) self.newborder.corner_radius_kappa        = v; self.shadow:invalidate() end
 
 terra Layer:get_border_color_left   () return self.border.color_left   .uint end
 terra Layer:get_border_color_right  () return self.border.color_right  .uint end
@@ -2920,17 +2918,21 @@ terra Layer:set_border_color_right  (v: uint32) self.newborder.color_right  .uin
 terra Layer:set_border_color_top    (v: uint32) self.newborder.color_top    .uint = v end
 terra Layer:set_border_color_bottom (v: uint32) self.newborder.color_bottom .uint = v end
 
-terra Layer:border_dashes_count() return self.border.dash.len end
-terra Layer:border_dashes_clear() self.border.dash:clear() end
-terra Layer:border_dashes_get(i: int) self.newborder.dash(i) end
-terra Layer:border_dashes_set(i: int, dash: num) self.newborder.dash:set(i, dash) end
+terra Layer:get_border_dash_count() return self.border.dash.len end
+terra Layer:clear_border_dash() self.border.dash.len = 0 end
+terra Layer:get_border_dash(i: int) return self.newborder.dash(i) end
+terra Layer:set_border_dash(i: int, v: num) return self.newborder.dash:set(i, v) end
 terra Layer:get_border_dash_offset() return self.border.dash_offset end
 terra Layer:set_border_dash_offset(v: int) self.newborder.dash_offset = v end
 
-terra Layer:set_border_line_to(line_to: BorderLineToFunc) self.newborder.line_to = line_to end
+terra Layer:get_border_offset() return self.border.offset end
+terra Layer:set_border_offset(v: int) self.newborder.offset = v; self.shadow:invalidate() end
 
---backgrounds
-do end --fix for "function or expression too complex"
+terra Layer:set_border_line_to(line_to: BorderLineToFunc)
+	self.newborder.line_to = line_to; self.shadow:invalidate()
+end
+
+do end --backgrounds
 
 terra Layer:get_newbackground()
 	if self.background == &default_background then
@@ -2974,24 +2976,24 @@ terra Layer:set_background_gradient_cy2(cy2: num) self.newbackground.newgradient
 terra Layer:set_background_gradient_r1 (r1 : num) self.newbackground.newgradient.newcircles.r1  = r1  end
 terra Layer:set_background_gradient_r2 (r2 : num) self.newbackground.newgradient.newcircles.r2  = r2  end
 
-terra Layer:background_gradient_color_stops_count()
+terra Layer:get_background_gradient_color_stops_count()
 	return self.background.gradient.color_stops.len
 end
-terra Layer:background_gradient_color_stops_clear()
-	self.background.gradient.color_stops:clear()
+terra Layer:clear_background_gradient_color_stops()
+	self.background.gradient.color_stops.len = 0
 end
-terra Layer:background_gradient_color_stops_color_get(i: int)
+terra Layer:get_background_gradient_color_stops_color(i: int)
 	var cs = self.background.gradient.color_stops:at(i); assert(cs ~= nil)
 	return cs.color.uint
 end
-terra Layer:background_gradient_color_stops_offset_get(i: int)
+terra Layer:get_background_gradient_color_stops_offset(i: int)
 	var cs = self.background.gradient.color_stops:at(i); assert(cs ~= nil)
 	return cs.offset
 end
-terra Layer:background_gradient_color_stops_color_set(i: int, color: uint32)
+terra Layer:set_background_gradient_color_stops_color(i: int, color: uint32)
 	self.newbackground.newgradient.color_stops:set(i).color.uint = color
 end
-terra Layer:background_gradient_color_stops_offset_set(i: int, offset: num)
+terra Layer:set_background_gradient_color_stops_offset(i: int, offset: num)
 	self.newbackground.newgradient.color_stops:set(i).offset = offset
 end
 
@@ -3012,7 +3014,7 @@ terra Layer:get_background_scale_cy    () return self.background.scale_cy end
 terra Layer:get_background_extend      () return self.background.extend end
 
 terra Layer:set_background_hittable    (v: bool) self.newbackground.hittable = v end
-terra Layer:set_background_clip_border_offset(v: num) self.newbackground.clip_border_offset = v end
+terra Layer:set_background_clip_border_offset(v: num) self.newbackground.clip_border_offset = v; self.shadow:invalidate() end
 terra Layer:set_background_operator    (v: enum) self.newbackground.operator = v end
 terra Layer:set_background_x           (v: num)  self.newbackground.x = v end
 terra Layer:set_background_y           (v: num)  self.newbackground.y = v end
@@ -3024,21 +3026,226 @@ terra Layer:set_background_scale_cx    (v: num)  self.newbackground.scale_cx = v
 terra Layer:set_background_scale_cy    (v: num)  self.newbackground.scale_cy = v end
 terra Layer:set_background_extend      (v: enum) self.newbackground.extend = v end
 
+do end --shadows
+
+terra Layer:get_newshadow()
+	if self.shadow == &default_shadow then
+		self.shadow = self.manager.shadows:alloc()
+		self.shadow:init(self)
+	end
+	return self.shadow
+end
+
+terra Layer:get_shadow_x      () return self.shadow.x end
+terra Layer:get_shadow_y      () return self.shadow.x end
+terra Layer:get_shadow_color  () return self.shadow.color end
+terra Layer:get_shadow_blur   () return self.shadow.blur end
+terra Layer:get_shadow_passes () return self.shadow.passes end
+
+terra Layer:set_shadow_x      (v: num)    self.newshadow.x          = v end
+terra Layer:set_shadow_y      (v: num)    self.newshadow.x          = v end
+terra Layer:set_shadow_color  (v: uint32) self.newshadow.color.uint = v end
+terra Layer:set_shadow_blur   (v: uint8)  self.newshadow.blur       = v; self.shadow:invalidate() end
+terra Layer:set_shadow_passes (v: uint8)  self.newshadow.passes     = v; self.shadow:invalidate() end
+
+do end --text
+
+terra Layer:get_newtext()
+	if self.text == &default_text then
+		self.text = self.manager.texts:alloc()
+		self.text:init(self)
+	end
+	return self.text
+end
+
+terra Layer:get_text_utf32() return self.text.runs.text.elements end
+terra Layer:get_text_utf32_len() return self.text.runs.text.len end
+
+terra Layer:set_text_utf32(s: &codepoint, len: int)
+	var t = &self.newtext.runs.text
+	t.len = 0
+	t:add(s, len)
+	self.text.shaped = false
+end
+
+struct TextRun (gettersandsetters) {
+	t: tr.TextRun;
+}
+TextRun.metamethods.__typename_ffi = 'TextRun'
+
+terra TextRun:unshape() self.t._state.t.shaped = false end
+terra TextRun:unwrap() self.t._state.t.wrapped = false end
+
+terra TextRun:get_feature_count() self.t.features.len end
+terra TextRun:feature_clear() self.t.features.len = 0; self:unshape() end
+
+terra TextRun:feature_get(i: int, buf: &char, len: int)
+	var f = self.t.features:at(i); assert(f ~= nil)
+	hb_feature_to_string(f, buf, len)
+end
+
+terra TextRun:feature_set(i: int, s: rawstring, len: int)
+	var f = self.t.features:set(i); assert(f ~= nil)
+	if hb_feature_from_string(s, len, f) ~= 0 then
+		self:unshape()
+		return true
+	else
+		return false
+	end
+end
+
+terra TextRun:get_offset            () return self.t.offset end
+terra TextRun:get_font              () return [&LayerFont](self.t.font) end
+terra TextRun:get_font_size         () return self.t.font_size end
+terra TextRun:get_script            () return self.t.script end
+terra TextRun:get_lang              () return self.t.lang end
+terra TextRun:get_dir               () return self.t.dir end
+terra TextRun:get_line_spacing      () return self.t.line_spacing end
+terra TextRun:get_hardline_spacing  () return self.t.hardline_spacing end
+terra TextRun:get_paragraph_spacing () return self.t.paragraph_spacing end
+terra TextRun:get_nowrap            () return self.t.nowrap end
+terra TextRun:get_color             () return self.t.color.uint end
+terra TextRun:get_opacity           () return self.t.opacity end
+terra TextRun:get_operator          () return self.t.operator end
+
+terra TextRun:set_offset            (v: int)            self.t.offset = v    ; self:unshape() end
+terra TextRun:set_font              (v: &LayerFont)     self.t.font = &v.f;  ; self:unshape() end
+terra TextRun:set_font_size         (v: num)            self.t.font_size = v ; self:unshape() end
+terra TextRun:set_script            (v: hb_script_t)    self.t.script = v    ; self:unshape() end
+terra TextRun:set_lang              (v: hb_language_t)  self.t.lang = v      ; self:unshape() end
+terra TextRun:set_dir               (v: FriBidiParType) self.t.dir = v       ; self:unshape() end
+terra TextRun:set_line_spacing      (v: num)            self.t.line_spacing = v      ; self:unwrap() end
+terra TextRun:set_hardline_spacing  (v: num)            self.t.hardline_spacing = v  ; self:unwrap() end
+terra TextRun:set_paragraph_spacing (v: num)            self.t.paragraph_spacing = v ; self:unwrap() end
+terra TextRun:set_nowrap            (v: bool)           self.t.nowrap = v            ; self:unwrap() end
+terra TextRun:set_color             (v: uint32)         self.t.color.uint = v end
+terra TextRun:set_opacity           (v: double)         self.t.opacity = v    end
+terra TextRun:set_operator          (v: int)            self.t.operator = v   end
+
+terra Layer:get_text_run_count() return self.newtext.runs.array.len end
+terra Layer:text_run_clear()
+	self.newtext.runs.array.len = 0
+	self.text.shaped = false
+end
+terra Layer:text_run(i: int)
+	var a = &self.newtext.runs.array
+	if a:index(i) ~= -1 then
+		return [&TextRun](a:at(i))
+	else
+		var t = a:set(i); assert(t ~= nil); t:init()
+		t._state.t = self.text
+		self.text.shaped = false
+		return [&TextRun](t)
+	end
+end
+
+terra Layer:get_align_x() return self.text.align_x end
+terra Layer:get_align_y() return self.text.align_y end
+
+terra Layer:set_align_x(v: enum) self.newtext.align_x = v end
+terra Layer:set_align_y(v: enum) self.newtext.align_y = v end
+
+terra Layer:get_caret_width()       return self.text.caret_width end
+terra Layer:get_caret_color()       return self.text.caret_color.uint end
+terra Layer:get_caret_insert_mode() return self.text.caret_insert_mode end
+terra Layer:get_selectable()        return self.text.selectable end
+
+terra Layer:set_caret_width(v: num)        self.newtext.caret_width = v end
+terra Layer:set_caret_color(v: uint32)     self.newtext.caret_color.uint = v end
+terra Layer:set_caret_insert_mode(v: bool) self.newtext.caret_insert_mode = v end
+terra Layer:set_selectable(v: bool)        self.newtext.selectable = v end
+
+--fonts
+
+terra LayerFont:init(manager: &LayerManager, load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
+	self.f:init(&manager.tr, load, unload)
+end
+
+terra LayerFont:free()
+	assert(self.f.refcount == 0)
+	C.free(self)
+end
+
+terra LayerManager:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
+	var font = alloc(LayerFont)
+	font:init(self, load, unload)
+	return font
+end
+
+do end --layouts
+
+--[[
+terra Layer:get_newflex()
+	if self.flex == &default_flexbox_layout then
+		self.flex = self.manager.flexbox_layouts:alloc()
+		self.flex:init()
+	end
+	return self.flex
+end
+
+terra Layer:get_flex_align_items_x() return self.flex.align_items_x end
+terra Layer:set_flex_align_items_x(v: num) self.newflex.align_items_x = v end
+]]
+
+--publish & bulid
+
 function build(self)
 	local public = publish'layerlib'
+
+	public(TextRun, {
+
+		get_feature_count=1,
+		feature_clear=1,
+		feature_get=1,
+		feature_set=1,
+
+		get_offset            =1,
+		get_font              =1,
+		get_font_size         =1,
+		get_script            =1,
+		get_lang              =1,
+		get_dir               =1,
+		get_line_spacing      =1,
+		get_hardline_spacing  =1,
+		get_paragraph_spacing =1,
+		get_nowrap            =1,
+		get_color             =1,
+		get_opacity           =1,
+		get_operator          =1,
+
+		set_offset            =1,
+		set_font              =1,
+		set_font_size         =1,
+		set_script            =1,
+		set_lang              =1,
+		set_dir               =1,
+		set_line_spacing      =1,
+		set_hardline_spacing  =1,
+		set_paragraph_spacing =1,
+		set_nowrap            =1,
+		set_color             =1,
+		set_opacity           =1,
+		set_operator          =1,
+	}, true)
+
+	public(LayerFont, {
+		free=1,
+	}, true)
 
 	public(layer_manager)
 
 	public(Layer, {
+
 		free=1,
 		draw=1,
+		sync=1,
 
 		--position in hierarchy
 
 		get_parent=1,
 		get_index=1,
-		layer_at=1,
-		layer_count=1,
+		layer=1,
+		get_layer_count=1,
 		layer_insert=1,
 		layer_remove=1,
 		layer_move=1,
@@ -3103,10 +3310,10 @@ function build(self)
 		set_border_color_top    =1,
 		set_border_color_bottom =1,
 
-		border_dashes_count=1,
-		border_dashes_clear=1,
-		border_dashes_get=1,
-		border_dashes_set=1,
+		get_border_dash_count=1,
+		clear_border_dash=1,
+		get_border_dash=1,
+		set_border_dash=1,
 		get_border_dash_offset=1,
 		set_border_dash_offset=1,
 
@@ -3147,12 +3354,12 @@ function build(self)
 		set_background_gradient_r1 =1,
 		set_background_gradient_r2 =1,
 
-		background_gradient_color_stops_count=1,
-		background_gradient_color_stops_clear=1,
-		background_gradient_color_stops_color_get=1,
-		background_gradient_color_stops_color_set=1,
-		background_gradient_color_stops_offset_get=1,
-		background_gradient_color_stops_offset_set=1,
+		get_background_gradient_color_stops_count=1,
+		clear_background_gradient_color_stops=1,
+		get_background_gradient_color_stops_color=1,
+		set_background_gradient_color_stops_color=1,
+		get_background_gradient_color_stops_offset=1,
+		set_background_gradient_color_stops_offset=1,
 
 		get_background_image=1,
 		set_background_image=1,
@@ -3183,10 +3390,54 @@ function build(self)
 		set_background_scale_cy    =1,
 		set_background_extend      =1,
 
+		--shadows
+
+		get_shadow_x      =1,
+		get_shadow_y      =1,
+		get_shadow_color  =1,
+		get_shadow_blur   =1,
+		get_shadow_passes =1,
+
+		set_shadow_x      =1,
+		set_shadow_y      =1,
+		set_shadow_color  =1,
+		set_shadow_blur   =1,
+		set_shadow_passes =1,
+
+		--text
+
+		get_text_utf32=1,
+		get_text_utf32_len=1,
+		set_text_utf32=1,
+
+		get_text_run_count=1,
+		text_run_clear=1,
+		text_run=1,
+
+		get_align_x=1,
+		get_align_y=1,
+
+		set_align_x=1,
+		set_align_y=1,
+
+		get_caret_width=1,
+		get_caret_color=1,
+		get_caret_insert_mode=1,
+		get_selectable=1,
+
+		set_caret_width=1,
+		set_caret_color=1,
+		set_caret_insert_mode=1,
+		set_selectable=1,
+
+		--layouts
+
+
 	}, true)
 
 	public(LayerManager, {
 		layer=1,
+		font=1,
 		free=1,
 	}, true)
 
