@@ -16,7 +16,6 @@ local function load_font(self, file_data_buf, file_size_buf)
 	local s = glue.readfile'media/fonts/OpenSans-Regular.ttf'
 	file_data_buf[0] = ffi.cast('void*', s)
 	file_size_buf[0] = #s
-	print(file_data_buf[0], file_size_buf[0])
 end
 local function unload_font(self, file_data_buf, file_size_buf)
 	ffi.free(file_data_buf[0])
@@ -30,8 +29,8 @@ function win:repaint()
 	cr:rgba(0, 0, 0, 1)
 	cr:paint()
 
-	--e.x = 100
-	--e.y = 100
+	e.x = 100
+	e.y = 100
 	e.w = 100
 	e.h = 100
 	e.border_left = 2
@@ -60,6 +59,7 @@ function win:repaint()
 	e:sync(self:client_size())
 	e:draw(cr)
 
+	--os.exit()
 	self:invalidate()
 end
 

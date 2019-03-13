@@ -1,4 +1,4 @@
-
+--go@ luajit -jp=z *
 local layerlib = {__index = require'low'}
 setfenv(1, setmetatable(layerlib, layerlib))
 require'cairolib'
@@ -1455,6 +1455,8 @@ local terra null_sync_x(self: &Layer, other_axis_synced: bool)
 end
 
 local terra null_sync_top(self: &Layer, w: num, h: num)
+	self.x = 0
+	self.y = 0
 	self.w = w
 	self.h = h
 end
@@ -3129,14 +3131,14 @@ terra Layer:text_run_clear()
 end
 terra Layer:text_run(i: int)
 	var a = &self.newtext.runs.array
-	if a:index(i) ~= -1 then
-		return [&TextRun](a:at(i))
-	else
-		var t = a:set(i); assert(t ~= nil); t:init()
+	var t = a:at(i, nil)
+	if t == nil then
+		t = a:set(i)
+		t:init()
 		t._state.t = self.text
 		self.text.shaped = false
-		return [&TextRun](t)
 	end
+	return [&TextRun](t)
 end
 
 terra Layer:get_align_x() return self.text.align_x end
@@ -3444,7 +3446,7 @@ function build(self)
 	public:getenums(layerlib)
 
 	public:build{
-		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak', 'boxblur'},
+		linkto = {'cairo', 'freetype', 'harfbuzz', 'fribidi', 'unibreak', 'boxblur', 'xxhash'},
 	}
 end
 
