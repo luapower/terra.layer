@@ -3165,7 +3165,7 @@ end
 
 terra LayerFont:free()
 	assert(self.f.refcount == 0)
-	C.free(self)
+	memfree(self)
 end
 
 terra LayerManager:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)

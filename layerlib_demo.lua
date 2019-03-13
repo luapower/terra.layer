@@ -49,7 +49,7 @@ function win:repaint()
 	--e.background_gradient_cx1 = 1
 	--e.background_color = 0x0000ffff --0x336699ff
 
-	local s = 'H\0\0\0e\0\0\0l\0\0\0l\0\0\0o\0\0\0'
+	local s = 'H\0\0\0H\0\0\0'--l\0\0\0l\0\0\0o\0\0\0'
 	local p = ffi.cast('const char*', s)
 	e:set_text_utf32(ffi.cast('uint32_t*', p), #s / 4)
 	local t = e:text_run(0)
