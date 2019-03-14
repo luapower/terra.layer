@@ -893,7 +893,8 @@ end
 
 terra LayerBackground:set_type(type: enum)
 	if self._type == type then return end
-	free(self._pattern)
+	self._pattern:free()
+	self._pattern = nil
 	if self._type == BACKGROUND_TYPE_GRADIENT then
 		self._gradient:free()
 	elseif self._type == BACKGROUND_TYPE_IMAGE then
@@ -1163,23 +1164,38 @@ terra Layer:text_visible()
 		and self.text.runs.text.len > 0
 end
 
+terra LayerText:unshape()
+	self.shaped = false
+	self.wrapped = false
+end
+
+terra LayerText:unwrap()
+	self.wrapped = false
+end
+
 terra Layer:sync_text_shape()
 	if not self:text_visible() then return false end
 	if self.text.shaped then return true end
+	print'shaping'
 	self.manager.tr:shape(&self.text.runs, &self.text.segments)
+	print'shaped'
 	self.text.shaped = true
 	return true
 end
 
 terra Layer:sync_text_wrap()
 	if self.text.wrapped then return end
+	print'wrapping'
 	self.text.segments:wrap(self.cw)
+	print'wrapped'
 	self.text.wrapped = true
 end
 
 terra Layer:sync_text_align()
+	print('aligning', self.cw, self.ch, self.text.align_x, self.text.align_y)
 	self.text.segments:align(0, 0, self.cw, self.ch,
 		self.text.align_x, self.text.align_y)
+	print'aligned'
 	if self.text.selectable then
 		self.text.selection:init(&self.text.segments)
 	end
@@ -1194,8 +1210,11 @@ terra Layer:draw_text(cr: &cairo_t)
 	if not self:text_visible() then return end
 	var x1: double, y1: double, x2: double, y2: double
 	cr:clip_extents(&x1, &y1, &x2, &y2)
+	print'clipping'
 	self.text.segments:clip(x1, y1, x2-x1, y2-y1)
+	print'painting'
 	self.manager.tr:paint(cr, &self.text.segments)
+	print'painted'
 end
 
 --[[
@@ -2941,7 +2960,8 @@ terra Layer:get_newbackground()
 		self.background = self.manager.backgrounds:alloc()
 		self.background:init()
 	end
-	free(self.background._pattern)
+	self.background._pattern:free()
+	self.background._pattern = nil
 	return self.background
 end
 
@@ -3067,7 +3087,7 @@ terra Layer:set_text_utf32(s: &codepoint, len: int)
 	var t = &self.newtext.runs.text
 	t.len = 0
 	t:add(s, len)
-	self.text.shaped = false
+	self.text:unshape()
 end
 
 struct TextRun (gettersandsetters) {
@@ -3075,8 +3095,8 @@ struct TextRun (gettersandsetters) {
 }
 TextRun.metamethods.__typename_ffi = 'TextRun'
 
-terra TextRun:unshape() self.t._state.t.shaped = false end
-terra TextRun:unwrap() self.t._state.t.wrapped = false end
+terra TextRun:unwrap() self.t._state.t:unwrap() end
+terra TextRun:unshape() self.t._state.t:unshape() end
 
 terra TextRun:get_feature_count() self.t.features.len end
 terra TextRun:feature_clear() self.t.features.len = 0; self:unshape() end
@@ -3110,8 +3130,20 @@ terra TextRun:get_color             () return self.t.color.uint end
 terra TextRun:get_opacity           () return self.t.opacity end
 terra TextRun:get_operator          () return self.t.operator end
 
+terra TextRun:set_font(v: &LayerFont)
+	if v == nil then
+		if self.t.font ~= nil then
+			self.t.font:unref()
+			self.t.font = nil
+			self:unshape()
+		end
+	elseif v.f:ref() then
+		self.t.font = &v.f
+		self:unshape()
+	end
+end
+
 terra TextRun:set_offset            (v: int)            self.t.offset = v    ; self:unshape() end
-terra TextRun:set_font              (v: &LayerFont)     self.t.font = &v.f;  ; self:unshape() end
 terra TextRun:set_font_size         (v: num)            self.t.font_size = v ; self:unshape() end
 terra TextRun:set_script            (v: hb_script_t)    self.t.script = v    ; self:unshape() end
 terra TextRun:set_lang              (v: hb_language_t)  self.t.lang = v      ; self:unshape() end
@@ -3127,7 +3159,7 @@ terra TextRun:set_operator          (v: int)            self.t.operator = v   en
 terra Layer:get_text_run_count() return self.newtext.runs.array.len end
 terra Layer:text_run_clear()
 	self.newtext.runs.array.len = 0
-	self.text.shaped = false
+	self.text:unshape()
 end
 terra Layer:text_run(i: int)
 	var a = &self.newtext.runs.array
@@ -3136,9 +3168,9 @@ terra Layer:text_run(i: int)
 		t = a:set(i)
 		t:init()
 		t._state.t = self.text
-		self.text.shaped = false
+		self.text:unshape()
 	end
-	return [&TextRun](t)
+	return t
 end
 
 terra Layer:get_align_x() return self.text.align_x end
@@ -3174,20 +3206,12 @@ terra LayerManager:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
 	return font
 end
 
-do end --layouts
-
---[[
-terra Layer:get_newflex()
-	if self.flex == &default_flexbox_layout then
-		self.flex = self.manager.flexbox_layouts:alloc()
-		self.flex:init()
-	end
-	return self.flex
+terra LayerManager:dump_stats()
+	pfn('Glyph cache size     : %d', self.tr.glyphs.size)
+	pfn('Glyph cache count    : %d', self.tr.glyphs.count)
+	pfn('GlyphRun cache size  : %d', self.tr.glyph_runs.size)
+	pfn('GlyphRun cache count : %d', self.tr.glyph_runs.count)
 end
-
-terra Layer:get_flex_align_items_x() return self.flex.align_items_x end
-terra Layer:set_flex_align_items_x(v: num) self.newflex.align_items_x = v end
-]]
 
 --publish & bulid
 
@@ -3441,6 +3465,7 @@ function build(self)
 		layer=1,
 		font=1,
 		free=1,
+		dump_stats=1,
 	}, true)
 
 	public:getenums(layerlib)

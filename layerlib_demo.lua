@@ -9,8 +9,8 @@ local win = nw:app():window{
 	w = 800, h = 500,
 }
 
-local lm = ll.layer_manager()
-local e = lm:layer()
+local man = ll.layer_manager()
+local e = man:layer()
 
 local function load_font(self, file_data_buf, file_size_buf)
 	local s = glue.readfile'media/fonts/OpenSans-Regular.ttf'
@@ -22,7 +22,7 @@ local function unload_font(self, file_data_buf, file_size_buf)
 	file_data_buf[0] = nil
 	file_size_buf[0] = 0
 end
-local font = lm:font(load_font, unload_font)
+local font = man:font(load_font, unload_font)
 
 function win:repaint()
 	local cr = win:bitmap():cairo()
@@ -49,15 +49,20 @@ function win:repaint()
 	--e.background_gradient_cx1 = 1
 	--e.background_color = 0x0000ffff --0x336699ff
 
-	local s = 'H\0\0\0H\0\0\0'--l\0\0\0l\0\0\0o\0\0\0'
+	local s = 'H\0\0\0e\0\0\0l\0\0\0l\0\0\0o\0\0\0 \0\0\0W\0\0\0o\0\0\0r\0\0\0l\0\0\0d\0\0\0!\0\0\0'
+	assert(#s / 4 == math.floor(#s / 4))
 	local p = ffi.cast('const char*', s)
 	e:set_text_utf32(ffi.cast('uint32_t*', p), #s / 4)
 	local t = e:text_run(0)
 	t.font = font
 	t.font_size = 16
+	t.color = 0xffffffff
 
-	e:sync(self:client_size())
+	local cx, cy = self:client_size()
+	e:sync(cx, cy)
 	e:draw(cr)
+
+	man:dump_stats()
 
 	--os.exit()
 	self:invalidate()
@@ -65,4 +70,4 @@ end
 
 nw:app():run()
 e:free()
-lm:free()
+man:free()
