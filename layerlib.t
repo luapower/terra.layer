@@ -9,6 +9,7 @@ require'trlib_paint_cairo'
 local tr = require'trlib'
 local boxblur = require'boxblurlib'
 local bitmap = require'bitmaplib'
+local utf8 = require'utf8lib'
 
 ALIGN_AUTO          = tr.ALIGN_AUTO    --only for align_x
 ALIGN_LEFT          = tr.ALIGN_LEFT
@@ -2786,6 +2787,12 @@ terra Layer:free(): {}
 	end
 
 	if self.text ~= &default_text then
+		for i,run in self.text.runs.array do
+			if run.font ~= nil then
+				run.font:unref()
+				run.font = nil
+			end
+		end
 		self.text:free()
 		self.manager.texts:release(self.text)
 		self.text = &default_text
@@ -2940,7 +2947,7 @@ terra Layer:set_border_color_top    (v: uint32) self.newborder.color_top    .uin
 terra Layer:set_border_color_bottom (v: uint32) self.newborder.color_bottom .uint = v end
 
 terra Layer:get_border_dash_count() return self.border.dash.len end
-terra Layer:clear_border_dash() self.border.dash.len = 0 end
+terra Layer:clear_border_dashes() self.border.dash.len = 0 end
 terra Layer:get_border_dash(i: int) return self.newborder.dash(i) end
 terra Layer:set_border_dash(i: int, v: num) return self.newborder.dash:set(i, v) end
 terra Layer:get_border_dash_offset() return self.border.dash_offset end
@@ -3076,6 +3083,7 @@ terra Layer:get_newtext()
 	if self.text == &default_text then
 		self.text = self.manager.texts:alloc()
 		self.text:init(self)
+		self.text.runs.maxlen = 4096
 	end
 	return self.text
 end
@@ -3084,11 +3092,21 @@ terra Layer:get_text_utf32() return self.text.runs.text.elements end
 terra Layer:get_text_utf32_len() return self.text.runs.text.len end
 
 terra Layer:set_text_utf32(s: &codepoint, len: int)
-	var t = &self.newtext.runs.text
-	t.len = 0
-	t:add(s, len)
-	self.text:unshape()
+	var t = self.newtext
+	t.runs.text.len = 0
+	t.runs.text:add(s, min(t.runs.maxlen, len))
+	t:unshape()
 end
+
+terra Layer:set_text_utf8(s: rawstring, len: int)
+	var t = self.newtext
+	if len < 0 then len = strnlen(s, t.runs.maxlen) end
+	utf8.decode.toarr(s, len, &t.runs.text, t.runs.maxlen, utf8.REPLACE, utf8.INVALID)
+	t:unshape()
+end
+
+terra Layer:get_text_maxlen() return self.text.runs.maxlen end
+terra Layer:set_text_maxlen(maxlen: int) self.newtext.runs.maxlen = maxlen end
 
 struct TextRun (gettersandsetters) {
 	t: tr.TextRun;
@@ -3099,14 +3117,14 @@ terra TextRun:unwrap() self.t._state.t:unwrap() end
 terra TextRun:unshape() self.t._state.t:unshape() end
 
 terra TextRun:get_feature_count() self.t.features.len end
-terra TextRun:feature_clear() self.t.features.len = 0; self:unshape() end
+terra TextRun:clear_features() self.t.features.len = 0; self:unshape() end
 
-terra TextRun:feature_get(i: int, buf: &char, len: int)
+terra TextRun:get_feature(i: int, buf: &char, len: int)
 	var f = self.t.features:at(i); assert(f ~= nil)
 	hb_feature_to_string(f, buf, len)
 end
 
-terra TextRun:feature_set(i: int, s: rawstring, len: int)
+terra TextRun:set_feature(i: int, s: rawstring, len: int)
 	var f = self.t.features:set(i); assert(f ~= nil)
 	if hb_feature_from_string(s, len, f) ~= 0 then
 		self:unshape()
@@ -3143,11 +3161,11 @@ terra TextRun:set_font(v: &LayerFont)
 	end
 end
 
-terra TextRun:set_offset            (v: int)            self.t.offset = v    ; self:unshape() end
-terra TextRun:set_font_size         (v: num)            self.t.font_size = v ; self:unshape() end
-terra TextRun:set_script            (v: hb_script_t)    self.t.script = v    ; self:unshape() end
-terra TextRun:set_lang              (v: hb_language_t)  self.t.lang = v      ; self:unshape() end
-terra TextRun:set_dir               (v: FriBidiParType) self.t.dir = v       ; self:unshape() end
+terra TextRun:set_offset            (v: int)            self.t.offset = v            ; self:unshape() end
+terra TextRun:set_font_size         (v: num)            self.t.font_size = v         ; self:unshape() end
+terra TextRun:set_script            (v: hb_script_t)    self.t.script = v            ; self:unshape() end
+terra TextRun:set_lang              (v: hb_language_t)  self.t.lang = v              ; self:unshape() end
+terra TextRun:set_dir               (v: FriBidiParType) self.t.dir = v               ; self:unshape() end
 terra TextRun:set_line_spacing      (v: num)            self.t.line_spacing = v      ; self:unwrap() end
 terra TextRun:set_hardline_spacing  (v: num)            self.t.hardline_spacing = v  ; self:unwrap() end
 terra TextRun:set_paragraph_spacing (v: num)            self.t.paragraph_spacing = v ; self:unwrap() end
@@ -3157,7 +3175,7 @@ terra TextRun:set_opacity           (v: double)         self.t.opacity = v    en
 terra TextRun:set_operator          (v: int)            self.t.operator = v   end
 
 terra Layer:get_text_run_count() return self.newtext.runs.array.len end
-terra Layer:text_run_clear()
+terra Layer:clear_text_runs()
 	self.newtext.runs.array.len = 0
 	self.text:unshape()
 end
@@ -3170,7 +3188,7 @@ terra Layer:text_run(i: int)
 		t._state.t = self.text
 		self.text:unshape()
 	end
-	return t
+	return [&TextRun](t)
 end
 
 terra Layer:get_align_x() return self.text.align_x end
@@ -3200,9 +3218,14 @@ terra LayerFont:free()
 	memfree(self)
 end
 
-terra LayerManager:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
+FontLoadFunc   = {&LayerFont, &&opaque, &int64} -> {}
+FontUnloadFunc = {&LayerFont, &&opaque, &int64} -> {}
+FontLoadFunc  .__typename_ffi = 'LayerFontLoadFunc'
+FontUnloadFunc.__typename_ffi = 'LayerFontUnloadFunc'
+
+terra LayerManager:font(load: FontLoadFunc, unload: FontUnloadFunc)
 	var font = alloc(LayerFont)
-	font:init(self, load, unload)
+	font:init(self, [tr.FontLoadFunc](load), [tr.FontLoadFunc](unload))
 	return font
 end
 
@@ -3221,9 +3244,9 @@ function build(self)
 	public(TextRun, {
 
 		get_feature_count=1,
-		feature_clear=1,
-		feature_get=1,
-		feature_set=1,
+		clear_features=1,
+		get_feature=1,
+		set_feature=1,
 
 		get_offset            =1,
 		get_font              =1,
@@ -3337,7 +3360,7 @@ function build(self)
 		set_border_color_bottom =1,
 
 		get_border_dash_count=1,
-		clear_border_dash=1,
+		clear_border_dashes=1,
 		get_border_dash=1,
 		set_border_dash=1,
 		get_border_dash_offset=1,
@@ -3435,9 +3458,13 @@ function build(self)
 		get_text_utf32=1,
 		get_text_utf32_len=1,
 		set_text_utf32=1,
+		set_text_utf8=1,
+
+		get_text_maxlen=1,
+		set_text_maxlen=1,
 
 		get_text_run_count=1,
-		text_run_clear=1,
+		clear_text_runs=1,
 		text_run=1,
 
 		get_align_x=1,
