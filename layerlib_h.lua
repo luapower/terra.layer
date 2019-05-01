@@ -1,16 +1,17 @@
 local ffi = require'ffi'
 local C = ffi.load'layerlib'
 ffi.cdef[[
-typedef struct LayerManager LayerManager;
 typedef struct Layer Layer;
 typedef struct _cairo _cairo;
 typedef struct double2 double2;
 typedef struct Bitmap Bitmap;
 typedef struct cairo_argb32_color_t cairo_argb32_color_t;
-typedef struct hb_language_impl_t hb_language_impl_t;
+typedef struct LayerManager LayerManager;
+typedef struct Font Font;
 typedef void (*BorderLineToFunc) (Layer*, _cairo*, double, double, double);
-LayerManager* layer_manager();
-void Layer_free(Layer*);
+typedef void (*FontUnloadFunc) (Font*, void**, int64_t*);
+uint64_t memtotal();
+void memreport();
 void Layer_draw(Layer*, _cairo*);
 void Layer_sync(Layer*, double, double);
 double Layer_get_cx(Layer*);
@@ -155,10 +156,7 @@ void Layer_clear_text_span_features(Layer*, int32_t);
 bool Layer_get_text_span_feature(Layer*, int32_t, int32_t, const char *, int32_t);
 bool Layer_set_text_span_feature(Layer*, int32_t, int32_t, const char *, int32_t);
 int32_t Layer_get_text_span_offset(Layer*, int32_t);
-uint16_t Layer_get_text_span_font_id(Layer*, int32_t);
 float Layer_get_text_span_font_size(Layer*, int32_t);
-int32_t Layer_get_text_span_script(Layer*, int32_t);
-hb_language_impl_t* Layer_get_text_span_lang(Layer*, int32_t);
 uint32_t Layer_get_text_span_dir(Layer*, int32_t);
 float Layer_get_text_span_line_spacing(Layer*, int32_t);
 float Layer_get_text_span_hardline_spacing(Layer*, int32_t);
@@ -169,8 +167,6 @@ double Layer_get_text_span_opacity(Layer*, int32_t);
 int32_t Layer_get_text_span_operator(Layer*, int32_t);
 void Layer_set_text_span_offset(Layer*, int32_t, int32_t);
 void Layer_set_text_span_font_size(Layer*, int32_t, double);
-void Layer_set_text_span_script(Layer*, int32_t, int32_t);
-void Layer_set_text_span_lang(Layer*, int32_t, hb_language_impl_t*);
 void Layer_set_text_span_dir(Layer*, int32_t, uint32_t);
 void Layer_set_text_span_line_spacing(Layer*, int32_t, double);
 void Layer_set_text_span_hardline_spacing(Layer*, int32_t, double);
@@ -179,20 +175,39 @@ void Layer_set_text_span_nowrap(Layer*, int32_t, bool);
 void Layer_set_text_span_color(Layer*, int32_t, uint32_t);
 void Layer_set_text_span_opacity(Layer*, int32_t, double);
 void Layer_set_text_span_operator(Layer*, int32_t, int32_t);
+const char * Layer_get_text_span_script(Layer*, int32_t);
+void Layer_set_text_span_script(Layer*, int32_t, const char *);
+const char * Layer_get_text_span_lang(Layer*, int32_t);
+void Layer_set_text_span_lang(Layer*, int32_t, const char *);
 int8_t Layer_get_text_align_x(Layer*);
 int8_t Layer_get_text_align_y(Layer*);
 void Layer_set_text_align_x(Layer*, int8_t);
 void Layer_set_text_align_y(Layer*, int8_t);
-double Layer_get_caret_width(Layer*);
-uint32_t Layer_get_caret_color(Layer*);
-bool Layer_get_caret_insert_mode(Layer*);
+double Layer_get_text_caret_width(Layer*);
+uint32_t Layer_get_text_caret_color(Layer*);
+bool Layer_get_text_caret_insert_mode(Layer*);
 bool Layer_get_text_selectable(Layer*);
-void Layer_set_caret_width(Layer*, double);
-void Layer_set_caret_color(Layer*, uint32_t);
-void Layer_set_caret_insert_mode(Layer*, bool);
+void Layer_set_text_caret_width(Layer*, double);
+void Layer_set_text_caret_color(Layer*, uint32_t);
+void Layer_set_text_caret_insert_mode(Layer*, bool);
 void Layer_set_text_selectable(Layer*, bool);
-void LayerManager_free(LayerManager*);
+int16_t Layer_get_text_span_font_id(Layer*, int32_t);
+void Layer_set_text_span_font_id(Layer*, int32_t, int32_t);
+LayerManager* layer_manager();
+void LayerManager_free_layer(LayerManager*, Layer*);
 Layer* LayerManager_layer(LayerManager*);
+double LayerManager_get_font_size_resolution(LayerManager*);
+double LayerManager_get_subpixel_x_resolution(LayerManager*);
+double LayerManager_get_word_subpixel_x_resolution(LayerManager*);
+int32_t LayerManager_get_glyph_cache_size(LayerManager*);
+int32_t LayerManager_get_glyph_run_cache_size(LayerManager*);
+void LayerManager_set_font_size_resolution(LayerManager*, double);
+void LayerManager_set_subpixel_x_resolution(LayerManager*, double);
+void LayerManager_set_word_subpixel_x_resolution(LayerManager*, double);
+void LayerManager_set_glyph_cache_size(LayerManager*, int32_t);
+void LayerManager_set_glyph_run_cache_size(LayerManager*, int32_t);
+void LayerManager_free(LayerManager*);
+int32_t LayerManager_font(LayerManager*, FontUnloadFunc, FontUnloadFunc);
 void LayerManager_dump_stats(LayerManager*);
 ]]
 pcall(ffi.cdef, 'struct double2 { double _0; double _1; };')
@@ -262,9 +277,9 @@ local getters = {
 	text_span_count = C.Layer_get_text_span_count,
 	text_align_x = C.Layer_get_text_align_x,
 	text_align_y = C.Layer_get_text_align_y,
-	caret_width = C.Layer_get_caret_width,
-	caret_color = C.Layer_get_caret_color,
-	caret_insert_mode = C.Layer_get_caret_insert_mode,
+	text_caret_width = C.Layer_get_text_caret_width,
+	text_caret_color = C.Layer_get_text_caret_color,
+	text_caret_insert_mode = C.Layer_get_text_caret_insert_mode,
 	text_selectable = C.Layer_get_text_selectable,
 }
 local setters = {
@@ -324,13 +339,12 @@ local setters = {
 	text_maxlen = C.Layer_set_text_maxlen,
 	text_align_x = C.Layer_set_text_align_x,
 	text_align_y = C.Layer_set_text_align_y,
-	caret_width = C.Layer_set_caret_width,
-	caret_color = C.Layer_set_caret_color,
-	caret_insert_mode = C.Layer_set_caret_insert_mode,
+	text_caret_width = C.Layer_set_text_caret_width,
+	text_caret_color = C.Layer_set_text_caret_color,
+	text_caret_insert_mode = C.Layer_set_text_caret_insert_mode,
 	text_selectable = C.Layer_set_text_selectable,
 }
 local methods = {
-	free = C.Layer_free,
 	draw = C.Layer_draw,
 	sync = C.Layer_sync,
 	to_parent = C.Layer_to_parent,
@@ -358,10 +372,7 @@ local methods = {
 	get_text_span_feature = C.Layer_get_text_span_feature,
 	set_text_span_feature = C.Layer_set_text_span_feature,
 	get_text_span_offset = C.Layer_get_text_span_offset,
-	get_text_span_font_id = C.Layer_get_text_span_font_id,
 	get_text_span_font_size = C.Layer_get_text_span_font_size,
-	get_text_span_script = C.Layer_get_text_span_script,
-	get_text_span_lang = C.Layer_get_text_span_lang,
 	get_text_span_dir = C.Layer_get_text_span_dir,
 	get_text_span_line_spacing = C.Layer_get_text_span_line_spacing,
 	get_text_span_hardline_spacing = C.Layer_get_text_span_hardline_spacing,
@@ -372,8 +383,6 @@ local methods = {
 	get_text_span_operator = C.Layer_get_text_span_operator,
 	set_text_span_offset = C.Layer_set_text_span_offset,
 	set_text_span_font_size = C.Layer_set_text_span_font_size,
-	set_text_span_script = C.Layer_set_text_span_script,
-	set_text_span_lang = C.Layer_set_text_span_lang,
 	set_text_span_dir = C.Layer_set_text_span_dir,
 	set_text_span_line_spacing = C.Layer_set_text_span_line_spacing,
 	set_text_span_hardline_spacing = C.Layer_set_text_span_hardline_spacing,
@@ -382,6 +391,12 @@ local methods = {
 	set_text_span_color = C.Layer_set_text_span_color,
 	set_text_span_opacity = C.Layer_set_text_span_opacity,
 	set_text_span_operator = C.Layer_set_text_span_operator,
+	get_text_span_script = C.Layer_get_text_span_script,
+	set_text_span_script = C.Layer_set_text_span_script,
+	get_text_span_lang = C.Layer_get_text_span_lang,
+	set_text_span_lang = C.Layer_set_text_span_lang,
+	get_text_span_font_id = C.Layer_get_text_span_font_id,
+	set_text_span_font_id = C.Layer_set_text_span_font_id,
 }
 ffi.metatype('Layer', {
 	__index = function(self, k)
@@ -397,11 +412,41 @@ ffi.metatype('Layer', {
 		setter(self, v)
 	end,
 })
-ffi.metatype('LayerManager', {__index = {
-	free = C.LayerManager_free,
+local getters = {
+	font_size_resolution = C.LayerManager_get_font_size_resolution,
+	subpixel_x_resolution = C.LayerManager_get_subpixel_x_resolution,
+	word_subpixel_x_resolution = C.LayerManager_get_word_subpixel_x_resolution,
+	glyph_cache_size = C.LayerManager_get_glyph_cache_size,
+	glyph_run_cache_size = C.LayerManager_get_glyph_run_cache_size,
+}
+local setters = {
+	font_size_resolution = C.LayerManager_set_font_size_resolution,
+	subpixel_x_resolution = C.LayerManager_set_subpixel_x_resolution,
+	word_subpixel_x_resolution = C.LayerManager_set_word_subpixel_x_resolution,
+	glyph_cache_size = C.LayerManager_set_glyph_cache_size,
+	glyph_run_cache_size = C.LayerManager_set_glyph_run_cache_size,
+}
+local methods = {
+	free_layer = C.LayerManager_free_layer,
 	layer = C.LayerManager_layer,
+	free = C.LayerManager_free,
+	font = C.LayerManager_font,
 	dump_stats = C.LayerManager_dump_stats,
-}})
+}
+ffi.metatype('LayerManager', {
+	__index = function(self, k)
+		local getter = getters[k]
+		if getter then return getter(self) end
+		return methods[k]
+	end,
+	__newindex = function(self, k, v)
+		local setter = setters[k]
+		if not setter then
+			error(('field not found: %s'):format(tostring(k)), 2)
+		end
+		setter(self, v)
+	end,
+})
 ffi.cdef[[
 enum {
 	ALIGN_AUTO = 4,
@@ -420,7 +465,8 @@ enum {
 	ALIGN_TOP = 1,
 	AXIS_ORDER_XY = 1,
 	AXIS_ORDER_YX = 2,
-	BACKGROUND_EXTEND_NO = 0,
+	BACKGROUND_EXTEND_NONE = 0,
+	BACKGROUND_EXTEND_PAD = 3,
 	BACKGROUND_EXTEND_REFLECT = 2,
 	BACKGROUND_EXTEND_REPEAT = 1,
 	BACKGROUND_TYPE_COLOR = 1,
@@ -444,5 +490,34 @@ enum {
 	LAYOUT_GRID = 3,
 	LAYOUT_NULL = 0,
 	LAYOUT_TEXT = 1,
+	OPERATOR_ADD = 12,
+	OPERATOR_ATOP = 5,
+	OPERATOR_CLEAR = 0,
+	OPERATOR_COLOR_BURN = 20,
+	OPERATOR_COLOR_DODGE = 19,
+	OPERATOR_DARKEN = 17,
+	OPERATOR_DEST = 6,
+	OPERATOR_DEST_ATOP = 10,
+	OPERATOR_DEST_IN = 8,
+	OPERATOR_DEST_OUT = 9,
+	OPERATOR_DEST_OVER = 7,
+	OPERATOR_DIFFERENCE = 23,
+	OPERATOR_EXCLUSION = 24,
+	OPERATOR_HARD_LIGHT = 21,
+	OPERATOR_HSL_COLOR = 27,
+	OPERATOR_HSL_HUE = 25,
+	OPERATOR_HSL_LUMINOSITY = 28,
+	OPERATOR_HSL_SATURATION = 26,
+	OPERATOR_IN = 3,
+	OPERATOR_LIGHTEN = 18,
+	OPERATOR_MULTIPLY = 14,
+	OPERATOR_OUT = 4,
+	OPERATOR_OVER = 2,
+	OPERATOR_OVERLAY = 16,
+	OPERATOR_SATURATE = 13,
+	OPERATOR_SCREEN = 15,
+	OPERATOR_SOFT_LIGHT = 22,
+	OPERATOR_SOURCE = 1,
+	OPERATOR_XOR = 11,
 }]]
 return C

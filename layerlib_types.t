@@ -2,7 +2,7 @@
 setfenv(1, require'layerlib_env')
 
 require'cairolib'
-local tr = require'trlib_env'
+tr = require'trlib_env'
 require'trlib_paint_cairo'
 require'trlib'
 require'bitmaplib'
@@ -28,11 +28,24 @@ ALIGN_BASELINE      = tr.ALIGN_MAX + 7
 
 color = cairo_argb32_color_t
 matrix = cairo_matrix_t
+pattern = cairo_pattern_t
+context = cairo_t
+surface = cairo_surface_t
+create_surface = cairo_image_surface_create_for_data
+
+local function map_enum(src_prefix, dst_prefix)
+	for k,v in pairs(C) do
+		local op = k:match('^'..src_prefix..'(.*)')
+		if op then layerlib[dst_prefix..op] = v end
+	end
+end
+map_enum('CAIRO_OPERATOR_', 'OPERATOR_')
+map_enum('CAIRO_EXTEND_', 'BACKGROUND_EXTEND_')
 
 Bitmap = bitmap.Bitmap
 
 terra Bitmap:surface()
-	return cairo_image_surface_create_for_data(
+	return create_surface(
 		[&uint8](self.pixels), self.format, self.w, self.h, self.stride)
 end
 
@@ -53,6 +66,7 @@ terra BoolBitmap:free()
 end
 
 struct Layer;
+struct LayerManager;
 
 struct Transform {
 	rotation: num;
@@ -77,7 +91,7 @@ terra Transform:apply(m: &matrix)
 	end
 end
 
-BorderLineToFunc = {&Layer, &cairo_t, num, num, num} -> {}
+BorderLineToFunc = {&Layer, &context, num, num, num} -> {}
 BorderLineToFunc.__typename_ffi = 'BorderLineToFunc'
 
 struct Border (gettersandsetters) {
@@ -122,6 +136,8 @@ struct ColorStop {
 	color: color;
 }
 
+ColorStop.empty = `ColorStop{0, 0}
+
 struct LinearGradientPoints {
 	x1: num; y1: num;
 	x2: num; y2: num;
@@ -139,10 +155,6 @@ BACKGROUND_TYPE_RADIAL_GRADIENT = 3
 BACKGROUND_TYPE_GRADIENT        = 3 --mask for LINEAR|RADIAL
 BACKGROUND_TYPE_IMAGE           = 4
 
-BACKGROUND_EXTEND_NO      = 0
-BACKGROUND_EXTEND_REPEAT  = 1
-BACKGROUND_EXTEND_REFLECT = 2
-
 struct BackgroundGradient {
 	color_stops: arr(ColorStop);
 	union {
@@ -151,6 +163,10 @@ struct BackgroundGradient {
 	}
 }
 
+terra BackgroundGradient:free()
+	self.color_stops:free()
+end
+
 struct BackgroundPattern {
 	x: num;
 	y: num;
@@ -158,15 +174,12 @@ struct BackgroundPattern {
 		gradient: BackgroundGradient;
 		bitmap: Bitmap;
 	};
-	pattern: &cairo_pattern_t;
+	pattern: &pattern;
 	transform_id: int;
 	extend: enum; --BACKGROUND_EXTEND_*
 }
 
-terra BackgroundPattern:init()
-	fill(self)
-	self.extend = BACKGROUND_EXTEND_REPEAT
-end
+terra BackgroundPattern.methods.free :: {&BackgroundPattern, enum, &LayerManager} -> {}
 
 struct Background (gettersandsetters) {
 	type: enum; --BACKGROUND_TYPE_*
@@ -181,16 +194,11 @@ struct Background (gettersandsetters) {
 	};
 }
 
-terra Background:init()
-	fill(self)
-	self.hittable = true
-	self.operator = CAIRO_OPERATOR_OVER
-	self.clip_border_offset = 1
-end
+terra Background.methods.free :: {&Background, &LayerManager} -> {}
 
 struct ShadowState {
 	blur: Blur;
-	blurred_surface: &cairo_surface_t;
+	blurred_surface: &surface;
 	x: num; y: num;
 }
 
@@ -202,6 +210,8 @@ struct Shadow {
 	passes: uint8;
 	_state: ShadowState;
 }
+
+terra Shadow.methods.free :: {&Shadow} -> {}
 
 struct Text {
 	layout: tr.Layout;
@@ -216,22 +226,7 @@ struct Text {
 	selection: tr.Selection;
 }
 
-terra Text:init(r: &tr.Renderer)
-	fill(self)
-	self.layout:init(r)
-	self.layout.maxlen = 4096
-	self.align_x = ALIGN_CENTER
-	self.align_y = ALIGN_CENTER
-	self.shaped = true
-	self.wrapped = true
-	self.caret_width = 1
-	self.caret_color = color {0xffffffff}
-	self.selectable = true
-end
-
-terra Text:free()
-	self.layout:free()
-end
+terra Text.methods.free :: {&Text} -> {}
 
 struct LayoutSolver {
 	type       : enum; --LAYOUT_*
@@ -318,17 +313,16 @@ terra GridLayout:free()
 	self._rows:free()
 end
 
-struct LayerManager {
+struct LayerManager (gettersandsetters) {
 	text_renderer: tr.Renderer;
 	grid_occupied: BoolBitmap;
 
 	layers      : arrayfreelist(Layer);
 	transforms  : arrayfreelist(Transform);
 	borders     : arrayfreelist(Border);
-	backgrounds : arrayfreelist(Background);
+	backgrounds : arrayfreelist(Background, nil, &LayerManager);
 	shadows     : arrayfreelist(Shadow);
 	texts       : arrayfreelist(Text);
-	fonts       : arrayfreelist(tr.Font);
 	flexs       : arrayfreelist(FlexLayout);
 	grids       : arrayfreelist(GridLayout);
 
@@ -401,16 +395,19 @@ struct Layer (gettersandsetters) {
 
 }
 
-local function managed_prop(T, PROP, init)
+terra Layer.methods.free :: {&Layer} -> {}
+
+local function managed_prop(T, PROP, init, free)
 	local PROP_ID = PROP..'_id'
 	local FREELIST = PROP..'s'
 	init = init or macro(function(self) return quote self:init() end end)
+	free = free or macro(function(self) return quote self:free() end end)
 	T.methods['get_'..PROP] = macro(function(self)
 		return `self.manager.[FREELIST]:at(self.[PROP_ID])
 	end)
 	T.methods['new_'..PROP] = macro(function(self)
 		return quote
-			var freelist = self.manager.[FREELIST]
+			var freelist = &self.manager.[FREELIST]
 			var obj = freelist:at(self.[PROP_ID])
 			if self.[PROP_ID] == 0 then
 				var id = freelist:alloc()
@@ -430,7 +427,6 @@ local function managed_prop(T, PROP, init)
 		end
 	end)
 end
-managed_prop(Layer, 'font'       )
 managed_prop(Layer, 'transform'  )
 managed_prop(Layer, 'border'     )
 managed_prop(Layer, 'background' )
@@ -500,7 +496,7 @@ terra Layer:abs_matrix(): matrix --box matrix in window space
 	return am
 end
 
-terra Layer:cr_abs_matrix(cr: &cairo_t) --box matrix in cr's current space
+terra Layer:cr_abs_matrix(cr: &context) --box matrix in cr's current space
 	var cm = cr:matrix()
 	var rm = self:rel_matrix()
 	cm:transform(&rm)

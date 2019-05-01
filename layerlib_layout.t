@@ -833,7 +833,7 @@ end
 --bitmap-of-bools object -----------------------------------------------------
 
 terra BoolBitmap:set(row: int, col: int, val: bool)
-	self.bits:set((row - 1) * self.cols + col - 1, val)
+	self.bits:set((row - 1) * self.cols + col - 1, val, false)
 end
 
 terra BoolBitmap:get(row: int, col: int)
@@ -894,14 +894,6 @@ end
 GRID_FLOW_X = 0; GRID_FLOW_Y = 2 --main axis
 GRID_FLOW_L = 0; GRID_FLOW_R = 4 --horizontal direction
 GRID_FLOW_T = 0; GRID_FLOW_B = 8 --vertical direction
-
-function GRID_FLOW(s)
-	s = s:lower()
-	return bor(1,
-		(s:find('y', 1, true) and GRID_FLOW_Y or 0),
-		(s:find('r', 1, true) and GRID_FLOW_R or 0),
-		(s:find('b', 1, true) and GRID_FLOW_B or 0))
-end
 
 --auto-positioning algorithm
 

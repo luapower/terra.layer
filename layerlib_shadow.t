@@ -51,6 +51,7 @@ terra Layer:repaint_shadow(bmp: &Bitmap)
 end
 
 terra Layer:draw_shadow(cr: &cairo_t)
+	do return end
 	if not self:shadow_visible() then return end
 	var bx, by, bw, bh = self:shadow_bitmap_rect()
 	self.shadow._state.x = bx
@@ -58,7 +59,7 @@ terra Layer:draw_shadow(cr: &cairo_t)
 	if self.shadow._state.blurred_surface == nil then
 		var bmp = self.shadow._state.blur:blur(
 			bw, bh, self.shadow.blur, self.shadow.passes)
-		free(self.shadow._state.blurred_surface)
+		self.shadow._state.blurred_surface:free()
 		self.shadow._state.blurred_surface = bmp:surface()
 	end
 	var sx = bx + self.shadow.x
@@ -77,12 +78,14 @@ terra Shadow:init()
 		self)
 end
 
-terra Shadow:free(): {}
-	free(self._state.blurred_surface)
+terra Shadow:invalidate()
+	if self._state.blurred_surface ~= nil then
+		self._state.blurred_surface:free()
+		self._state.blurred_surface = nil
+	end
+end
+
+terra Shadow:free()
+	self:invalidate()
 	self._state.blur:free()
 end
-
-terra Shadow:invalidate()
-	free(self._state.blurred_surface)
-end
-

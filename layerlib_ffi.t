@@ -22,8 +22,7 @@ terra Layer:layer_insert(i: int)
 end
 
 terra Layer:layer_remove(i: int)
-	var e = self.children:at(i); assert(e ~= nil)
-	e:free()
+	self.children:at(i):free()
 end
 
 terra Layer:layer_move(i1: int, i2: int) --negative indices allowed
@@ -99,7 +98,7 @@ terra Layer:set_border_color_bottom (v: uint32) self:new_border().color_bottom .
 terra Layer:get_border_dash_count() return self.border.dash.len end
 terra Layer:clear_border_dashes() self.border.dash.len = 0 end
 terra Layer:get_border_dash(i: int) return self:new_border().dash(i) end
-terra Layer:set_border_dash(i: int, v: num) return self:new_border().dash:set(i, v) end
+terra Layer:set_border_dash(i: int, v: num) return self:new_border().dash:set(i, v, 0) end
 terra Layer:get_border_dash_offset() return self.border.dash_offset end
 terra Layer:set_border_dash_offset(v: int) self:new_border().dash_offset = v end
 
@@ -120,6 +119,9 @@ terra Layer:set_background_type(v: enum)
 	if v ~= BACKGROUND_TYPE_NONE then
 		b = self:new_background()
 		b.type = v
+		if b.type > BACKGROUND_TYPE_COLOR then
+			b.pattern:init()
+		end
 	end
 end
 
@@ -219,13 +221,13 @@ end
 terra Layer:set_background_gradient_color_stops_color(i: int, color: uint32)
 	var b = self.background
 	if (b.type and BACKGROUND_TYPE_GRADIENT) ~= 0 then
-		b.pattern.gradient.color_stops:set(i).color.uint = color
+		b.pattern.gradient.color_stops:getat(i, [ColorStop.empty]).color.uint = color
 	end
 end
 terra Layer:set_background_gradient_color_stops_offset(i: int, offset: num)
 	var b = self.background
 	if (b.type and BACKGROUND_TYPE_GRADIENT) ~= 0 then
-		b.pattern.gradient.color_stops:set(i).offset = offset
+		b.pattern.gradient.color_stops:getat(i, [ColorStop.empty]).offset = offset
 	end
 end
 
@@ -245,9 +247,9 @@ local get = function(self, FIELD)
 	return `iif(self.background_type > BACKGROUND_TYPE_COLOR,
 		self.background.pattern.[FIELD], 0)
 end
-terra Layer:get_background_x           () return [get(self, 'x')] end
-terra Layer:get_background_y           () return [get(self, 'y')] end
-terra Layer:get_background_extend      () return [get(self, 'extend')] end
+terra Layer:get_background_x      () return [get(self, 'x')] end
+terra Layer:get_background_y      () return [get(self, 'y')] end
+terra Layer:get_background_extend () return [get(self, 'extend')] end
 
 local set = function(self, FIELD, val)
 	return quote
@@ -256,9 +258,9 @@ local set = function(self, FIELD, val)
 		end
 	end
 end
-terra Layer:set_background_x           (v: num)  [set(self, 'x', v)] end
-terra Layer:set_background_y           (v: num)  [set(self, 'y', v)] end
-terra Layer:set_background_extend      (v: enum) [set(self, 'extend', v)] end
+terra Layer:set_background_x      (v: num)  [set(self, 'x', v)] end
+terra Layer:set_background_y      (v: num)  [set(self, 'y', v)] end
+terra Layer:set_background_extend (v: enum) [set(self, 'extend', v)] end
 
 local get = function(self, FIELD)
 	return `iif(self.background_type > BACKGROUND_TYPE_COLOR,
@@ -346,8 +348,7 @@ terra Layer:new_span(i: int)
 	var a = &self:new_text().layout.spans
 	var t = a:at(i, nil)
 	if t == nil then
-		t = a:set(i)
-		t:init()
+		t = a:set(i, self.manager.default_text_span, self.manager.default_text_span)
 		self:unshape()
 	end
 	return t
@@ -372,8 +373,9 @@ terra Layer:get_text_span_feature(span_i: int, feat_i: int, buf: &char, len: int
 	end
 	return false
 end
+local default_feat = `hb_feature_t {0, 0, 0, 0}
 terra Layer:set_text_span_feature(span_i: int, feat_i: int, s: rawstring, len: int)
-	var feat = self:new_span(span_i).features:set(feat_i)
+	var feat = self:new_span(span_i).features:set(feat_i, default_feat, default_feat)
 	if hb_feature_from_string(s, len, feat) ~= 0 then
 		self:unshape()
 		return true
@@ -384,8 +386,6 @@ end
 
 terra Layer:get_text_span_offset            (i: int) return self:span(i).offset            end
 terra Layer:get_text_span_font_size         (i: int) return self:span(i).font_size         end
-terra Layer:get_text_span_script            (i: int) return self:span(i).script            end
-terra Layer:get_text_span_lang              (i: int) return self:span(i).lang              end
 terra Layer:get_text_span_dir               (i: int) return self:span(i).dir               end
 terra Layer:get_text_span_line_spacing      (i: int) return self:span(i).line_spacing      end
 terra Layer:get_text_span_hardline_spacing  (i: int) return self:span(i).hardline_spacing  end
@@ -397,8 +397,6 @@ terra Layer:get_text_span_operator          (i: int) return self:span(i).operato
 
 terra Layer:set_text_span_offset            (i: int, v: int)            self:new_span(i).offset = v            ; self:unshape() end
 terra Layer:set_text_span_font_size         (i: int, v: num)            self:new_span(i).font_size = v         ; self:unshape() end
-terra Layer:set_text_span_script            (i: int, v: hb_script_t)    self:new_span(i).script = v            ; self:unshape() end
-terra Layer:set_text_span_lang              (i: int, v: hb_language_t)  self:new_span(i).lang = v              ; self:unshape() end
 terra Layer:set_text_span_dir               (i: int, v: FriBidiParType) self:new_span(i).dir = v               ; self:unshape() end
 terra Layer:set_text_span_line_spacing      (i: int, v: num)            self:new_span(i).line_spacing = v      ; self:unwrap() end
 terra Layer:set_text_span_hardline_spacing  (i: int, v: num)            self:new_span(i).hardline_spacing = v  ; self:unwrap() end
@@ -407,6 +405,30 @@ terra Layer:set_text_span_nowrap            (i: int, v: bool)           self:new
 terra Layer:set_text_span_color             (i: int, v: uint32)         self:new_span(i).color.uint = v end
 terra Layer:set_text_span_opacity           (i: int, v: double)         self:new_span(i).opacity = v    end
 terra Layer:set_text_span_operator          (i: int, v: int)            self:new_span(i).operator = v   end
+
+local script_buf = global(char[5])
+terra Layer:get_text_span_script(i: int)
+	hb_tag_to_string(self:span(i).script, [rawstring](&script_buf))
+	return [rawstring](&script_buf)
+end
+terra Layer:set_text_span_script(i: int, s: rawstring)
+	var script = hb_script_from_string(s, -1)
+	if self:span(i).script ~= script then
+		self:new_span(i).script = script
+		self:unshape()
+	end
+end
+
+terra Layer:get_text_span_lang(i: int)
+	return hb_language_to_string(self:span(i).lang)
+end
+terra Layer:set_text_span_lang(i: int, s: rawstring)
+	var lang = hb_language_from_string(s, -1)
+	if self:span(i).lang ~= lang then
+		self:new_span(i).lang = lang
+		self:unshape()
+	end
+end
 
 terra Layer:get_text_align_x() return self.text.align_x end
 terra Layer:get_text_align_y() return self.text.align_y end
@@ -417,49 +439,41 @@ terra Layer:set_text_align_y(v: enum) self:new_text().align_y = v end
 terra Layer:get_text_caret_width()       return self.text.caret_width end
 terra Layer:get_text_caret_color()       return self.text.caret_color.uint end
 terra Layer:get_text_caret_insert_mode() return self.text.caret_insert_mode end
-terra Layer:get_text_selectable()   return self.text.selectable end
+terra Layer:get_text_selectable()        return self.text.selectable end
 
 terra Layer:set_text_caret_width(v: num)        self:new_text().caret_width = v end
 terra Layer:set_text_caret_color(v: uint32)     self:new_text().caret_color.uint = v end
 terra Layer:set_text_caret_insert_mode(v: bool) self:new_text().caret_insert_mode = v end
-terra Layer:set_text_selectable(v: bool)   self:new_text().selectable = v end
+terra Layer:set_text_selectable(v: bool)        self:new_text().selectable = v end
 
 terra Layer:get_text_span_font_id(i: int) return self:span(i).font_id end
 
-terra Layer:set_text_span_font_id(i: int, font_id: int)
-	var span = self:new_span()
-	if font_id == span.font_id then return end
-	if font_id == -1 then
-		if span.font_id ~= -1 then
-			--TODO: span.font:unref()
-			span.font_id = -1
-		end
-	elseif v.f:ref() then
-		--TODO: t.font = &v.f
-	end
+terra Layer:set_text_span_font_id(span_i: int, font_id: int)
+	var font = self.manager.text_renderer.fonts:at(font_id, nil)
+	font_id = iif(font ~= nil, font_id, -1)
+	var span = self:span(span_i)
+	var old_font_id = span.font_id
+	if font_id == old_font_id then return end
+	var old_font = self.manager.text_renderer.fonts:at(old_font_id, nil)
+	if old_font ~= nil then old_font:unref() end
+	if font ~= nil then font:ref() end
+	self:new_span(span_i).font_id = font_id
 	self:unshape()
 end
 
---fonts
+--layer manager stuff
 
-terra LayerFont:init(manager: &LayerManager, load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
-	self.f:init(&manager.text_renderer, load, unload)
+terra layer_manager()
+	var man = alloc(LayerManager); man:init()
+	return man
 end
 
-terra LayerFont:free()
-	assert(self.f.refcount == 0)
-	memfree(self)
+terra LayerManager:free_and_dealloc()
+	free(self)
 end
 
-FontLoadFunc   = {&LayerFont, &&opaque, &int64} -> {}
-FontUnloadFunc = {&LayerFont, &&opaque, &int64} -> {}
-FontLoadFunc  .__typename_ffi = 'LayerFontLoadFunc'
-FontUnloadFunc.__typename_ffi = 'LayerFontUnloadFunc'
-
-terra LayerManager:font(load: FontLoadFunc, unload: FontUnloadFunc)
-	var font = alloc(LayerFont)
-	font:init(self, [tr.FontLoadFunc](load), [tr.FontLoadFunc](unload))
-	return font
+terra LayerManager:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
+	return self.text_renderer:font(load, unload)
 end
 
 terra LayerManager:dump_stats()
@@ -474,11 +488,11 @@ end
 function build(self)
 	local public = publish'layerlib'
 
-	public(layer_manager)
+	public(memtotal)
+	public(memreport)
 
 	public(Layer, {
 
-		free=1,
 		draw=1,
 		sync=1,
 
@@ -713,11 +727,28 @@ function build(self)
 
 	}, true)
 
+	public(layer_manager)
+
 	public(LayerManager, {
+
 		layer=1,
+		free_layer=1,
 		font=1,
-		free=1,
+		free_and_dealloc='free',
 		dump_stats=1,
+
+		get_font_size_resolution       =1,
+		get_subpixel_x_resolution      =1,
+		get_word_subpixel_x_resolution =1,
+		get_glyph_cache_size           =1,
+		get_glyph_run_cache_size       =1,
+
+		set_font_size_resolution       =1,
+		set_subpixel_x_resolution      =1,
+		set_word_subpixel_x_resolution =1,
+		set_glyph_cache_size           =1,
+		set_glyph_run_cache_size       =1,
+
 	}, true)
 
 	public:getenums(layerlib)

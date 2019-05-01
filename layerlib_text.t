@@ -3,6 +3,23 @@
 
 setfenv(1, require'layerlib_types')
 
+terra Text:init(r: &tr.Renderer)
+	fill(self)
+	self.layout:init(r)
+	self.layout.maxlen = 4096
+	self.align_x = ALIGN_CENTER
+	self.align_y = ALIGN_CENTER
+	self.shaped = true
+	self.wrapped = true
+	self.caret_width = 1
+	self.caret_color = color {0xffffffff}
+	self.selectable = true
+end
+
+terra Text:free()
+	self.layout:free()
+end
+
 terra Layer:text_visible()
 	return self.text.layout.spans.len > 0
 		and self.text.layout.spans:at(0).font_id ~= -1
@@ -22,25 +39,19 @@ end
 terra Layer:sync_text_shape()
 	if not self:text_visible() then return false end
 	if self.text.shaped then return true end
-	print'shaping'
 	self.text.layout:shape()
-	print'shaped'
 	self.text.shaped = true
 	return true
 end
 
 terra Layer:sync_text_wrap()
 	if self.text.wrapped then return end
-	print'wrapping'
 	self.text.layout:wrap(self.cw)
-	print'wrapped'
 	self.text.wrapped = true
 end
 
 terra Layer:sync_text_align()
-	print('aligning', self.cw, self.ch, self.text.align_x, self.text.align_y)
 	self.text.layout:align(0, 0, self.cw, self.ch, self.text.align_x, self.text.align_y)
-	print'aligned'
 	if self.text.selectable then
 		self.text.selection:init(&self.text.layout)
 	end
@@ -55,11 +66,8 @@ terra Layer:draw_text(cr: &cairo_t)
 	if not self:text_visible() then return end
 	var x1: double, y1: double, x2: double, y2: double
 	cr:clip_extents(&x1, &y1, &x2, &y2)
-	print'clipping'
 	self.text.layout:clip(x1, y1, x2-x1, y2-y1)
-	print'painting'
 	self.text.layout:paint(cr)
-	print'painted'
 end
 
 --[[
