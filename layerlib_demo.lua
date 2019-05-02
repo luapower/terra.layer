@@ -48,24 +48,37 @@ function win:repaint()
 	cr:rgba(1, 1, 1, 1)
 	cr:paint()
 
-	--e.border_left = 2
-	--e.border_top = 2
-	--e.border_right = 10
-	--e.border_color_left  = 0xffffffff
-	--e.border_color_top   = 0xffff00ff
-	--e.border_color_right = 0x008800ff
-	--e.corner_radius_top_left = 20
+	e.padding_left   =  2
+	e.padding_top    =  2
+	e.padding_right  = 10
+	e.padding_bottom =  1
 
-	--e.background_type = ll.BACKGROUND_TYPE_LINEAR_GRADIENT
-	--e.background_gradient_y2 = 100
-	--e:set_background_gradient_color_stops_offset(0, 0)
-	--e:set_background_gradient_color_stops_offset(1, 1)
-	--e:set_background_gradient_color_stops_color(0, 0xff0000ff)
-	--e:set_background_gradient_color_stops_color(1, 0x0000ffff)
-	--e.background_gradient_cx1 = 1
+	e.border_left   =  2
+	e.border_top    =  2
+	e.border_right  = 10
+	e.border_bottom =  1
+	e.border_color_left   = 0xff00ffff
+	e.border_color_top    = 0xffff00ff
+	e.border_color_right  = 0x008800ff
+	e.border_color_bottom = 0x888888ff
+	e.corner_radius_top_left = 20
+
+	e.background_type = ll.BACKGROUND_TYPE_LINEAR_GRADIENT
+	e.background_gradient_y2 = 100
+	e:set_background_gradient_color_stops_offset(0, 0)
+	e:set_background_gradient_color_stops_offset(1, 1)
+	e:set_background_gradient_color_stops_color(0, 0xff0000ff)
+	e:set_background_gradient_color_stops_color(1, 0x0000ffff)
+	e.background_gradient_cx1 = 1
 
 	e.background_type = ll.BACKGROUND_TYPE_COLOR
 	e.background_color = 0x000000ff --0x336699ff
+
+	e.shadow_y = 10
+	e.shadow_x = 10
+	e.shadow_blur = 5
+	e.shadow_passes = 3
+	e.shadow_color = 0x000000ff
 
 	if not self.xx then
 		e:set_text_utf8(s, -1)

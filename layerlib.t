@@ -64,7 +64,7 @@ terra LayerManager:init()
 
 	self.shadows:init()
 	self.shadows:alloc()
-	self.shadows:at(0):init()
+	self.shadows:at(0):init(nil)
 
 	self.texts:init()
 	self.texts:alloc()

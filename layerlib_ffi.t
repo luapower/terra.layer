@@ -55,6 +55,16 @@ terra Layer:set_y(v: num) self.y = v end
 terra Layer:set_w(v: num) self.w = v; self.shadow:invalidate() end
 terra Layer:set_h(v: num) self.h = v; self.shadow:invalidate() end
 
+terra Layer:get_padding_left  () return self.padding_left   end
+terra Layer:get_padding_top   () return self.padding_top    end
+terra Layer:get_padding_right () return self.padding_right  end
+terra Layer:get_padding_bottom() return self.padding_bottom end
+
+terra Layer:set_padding_left  (v: num) self.padding_left   = v end
+terra Layer:set_padding_top   (v: num) self.padding_top    = v end
+terra Layer:set_padding_right (v: num) self.padding_right  = v end
+terra Layer:set_padding_bottom(v: num) self.padding_bottom = v end
+
 terra Layer:get_min_cw() return self.min_cw end
 terra Layer:get_min_ch() return self.min_cw end
 
@@ -532,6 +542,16 @@ function build(self)
 		set_min_cw=1,
 		set_min_ch=1,
 
+		get_padding_left=1,
+		get_padding_top=1,
+		get_padding_right=1,
+		get_padding_bottom=1,
+
+		set_padding_left=1,
+		set_padding_top=1,
+		set_padding_right=1,
+		set_padding_bottom=1,
+
 		to_parent=1, from_parent=1,
 		to_window=1, from_window=1,
 
@@ -670,8 +690,6 @@ function build(self)
 		get_text_span_count=1,
 		clear_text_spans=1,
 
-		--text span
-
 		get_text_span_feature_count=1,
 		clear_text_span_features=1,
 		get_text_span_feature=1,
@@ -704,8 +722,6 @@ function build(self)
 		set_text_span_color             =1,
 		set_text_span_opacity           =1,
 		set_text_span_operator          =1,
-
-		--text continued
 
 		get_text_align_x=1,
 		get_text_align_y=1,

@@ -40,6 +40,14 @@ void Layer_set_x(Layer*, double);
 void Layer_set_y(Layer*, double);
 void Layer_set_w(Layer*, double);
 void Layer_set_h(Layer*, double);
+double Layer_get_padding_left(Layer*);
+double Layer_get_padding_top(Layer*);
+double Layer_get_padding_right(Layer*);
+double Layer_get_padding_bottom(Layer*);
+void Layer_set_padding_left(Layer*, double);
+void Layer_set_padding_top(Layer*, double);
+void Layer_set_padding_right(Layer*, double);
+void Layer_set_padding_bottom(Layer*, double);
 double Layer_get_min_cw(Layer*);
 double Layer_get_min_ch(Layer*);
 void Layer_set_min_cw(Layer*, double);
@@ -223,6 +231,10 @@ local getters = {
 	y = C.Layer_get_y,
 	w = C.Layer_get_w,
 	h = C.Layer_get_h,
+	padding_left = C.Layer_get_padding_left,
+	padding_top = C.Layer_get_padding_top,
+	padding_right = C.Layer_get_padding_right,
+	padding_bottom = C.Layer_get_padding_bottom,
 	min_cw = C.Layer_get_min_cw,
 	min_ch = C.Layer_get_min_ch,
 	border_left = C.Layer_get_border_left,
@@ -289,6 +301,10 @@ local setters = {
 	y = C.Layer_set_y,
 	w = C.Layer_set_w,
 	h = C.Layer_set_h,
+	padding_left = C.Layer_set_padding_left,
+	padding_top = C.Layer_set_padding_top,
+	padding_right = C.Layer_set_padding_right,
+	padding_bottom = C.Layer_set_padding_bottom,
 	min_cw = C.Layer_set_min_cw,
 	min_ch = C.Layer_set_min_ch,
 	border_left = C.Layer_set_border_left,

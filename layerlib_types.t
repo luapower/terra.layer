@@ -31,7 +31,7 @@ matrix = cairo_matrix_t
 pattern = cairo_pattern_t
 context = cairo_t
 surface = cairo_surface_t
-create_surface = cairo_image_surface_create_for_data
+create_surface = cairo_image_surface_create_for_bitmap
 
 local function map_enum(src_prefix, dst_prefix)
 	for k,v in pairs(C) do
@@ -45,8 +45,7 @@ map_enum('CAIRO_EXTEND_', 'BACKGROUND_EXTEND_')
 Bitmap = bitmap.Bitmap
 
 terra Bitmap:surface()
-	return create_surface(
-		[&uint8](self.pixels), self.format, self.w, self.h, self.stride)
+	return create_surface(self)
 end
 
 struct BoolBitmap {
@@ -430,7 +429,9 @@ end
 managed_prop(Layer, 'transform'  )
 managed_prop(Layer, 'border'     )
 managed_prop(Layer, 'background' )
-managed_prop(Layer, 'shadow'     )
+managed_prop(Layer, 'shadow', macro(function(self, layer)
+	return quote self:init(&layer) end
+end))
 managed_prop(Layer, 'text', macro(function(self, layer)
 	return quote self:init(&layer.manager.text_renderer) end
 end))
