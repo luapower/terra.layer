@@ -13,33 +13,85 @@ local win = app:window{
 	w = 1200, h = 700,
 }
 
+local s = glue.readfile'media/fonts/OpenSans-Regular.ttf'
+
 local function load_font(self, file_data_buf, file_size_buf)
-	local s = glue.readfile'media/fonts/OpenSans-Regular.ttf'
-	local p = glue.malloc(#s)
-	file_data_buf[0] = p
-	ffi.copy(file_data_buf[0], s, #s)
+	file_data_buf[0] = ffi.cast('void*', s)
 	file_size_buf[0] = #s
-	print('load_font', file_data_buf[0], file_size_buf[0])
 end
 
 local function unload_font(self, file_data_buf, file_size_buf)
-	print('unload_font', file_data_buf[0])
-	glue.free(file_data_buf[0])
 	file_data_buf[0] = nil
 	file_size_buf[0] = 0
 end
 
-local s = glue.readfile('lorem_ipsum.txt')--:sub(1, 20)
+local s = glue.readfile('lorem_ipsum.txt')
 
-assert(ll.memtotal() == 0)
+--assert(ll.memtotal() == 0)
 
-local man = ll.layer_manager()
-local font_id = man:font(load_font, unload_font)
-local e = man:layer()
+local llib = ll.layerlib()
+local font_id = llib:font(load_font, unload_font)
+local e = llib:layer(nil)
 
---man.subpixel_x_resolution = 1/2
---man.glyph_cache_size = 0
-man.glyph_run_cache_size = 0
+e.clip = ll.CLIP_PADDING
+--e.clip = ll.CLIP_NONE
+
+e.padding_left   =  2
+e.padding_top    =  2
+e.padding_right  = 10
+e.padding_bottom =  1
+
+e.border_left   =  2
+e.border_top    =  2
+e.border_right  = 10
+e.border_bottom =  1
+e.border_color_left   = 0xff00ffff
+e.border_color_top    = 0xffff00ff
+e.border_color_right  = 0x008800ff
+e.border_color_bottom = 0x888888ff
+e.corner_radius_top_left = 20
+
+--e.bg_type = ll.BG_COLOR
+--e.bg_color = 0x000022ff --0x336699ff
+
+e.bg_type = ll.BG_LINEAR_GRADIENT
+e.bg_y2 = 100
+e:set_bg_color_stops_offset(0, 0)
+e:set_bg_color_stops_offset(1, 1)
+e:set_bg_color_stops_color(0, 0xff0000ff)
+e:set_bg_color_stops_color(1, 0x0000ffff)
+e.bg_cx1 = 1
+
+e.shadow_y = 10
+e.shadow_x = 10
+e.shadow_blur = 5
+e.shadow_passes = 3
+e.shadow_color = 0x000000ff
+
+e.layout_type = ll.LAYOUT_FLEX
+--e.flex_flow = ll.FLEX_FLOW_Y
+
+local e1, e2 = e:child(0), e:child(1)
+
+e1.border = 10; e1.padding = 10
+e2.border = 10; e2.padding = 10
+e1.border_color = 0xffff00ff
+e2.border_color = 0x00ff00ff
+e1.min_cw = 10; e1.min_ch = 10
+e2.min_cw = 10; e2.min_ch = 10
+
+--llib.subpixel_x_resolution = 1/2
+--llib.glyph_cache_size = 0
+--llib.glyph_run_cache_size = 0
+
+e1:set_text_utf8(s, -1)
+e1:set_text_span_script   (0, 'Zyyy')
+e1:set_text_span_lang     (0, 'en')
+e1:set_text_span_font_id  (0, font_id)
+e1:set_text_span_font_size(0, 14)
+e1:set_text_span_color    (0, 0xffffffff)
+e1.text_align_y = ll.ALIGN_TOP
+e1.text_align_x = ll.ALIGN_CENTER
 
 function win:repaint()
 
@@ -48,55 +100,11 @@ function win:repaint()
 	cr:rgba(1, 1, 1, 1)
 	cr:paint()
 
-	e.padding_left   =  2
-	e.padding_top    =  2
-	e.padding_right  = 10
-	e.padding_bottom =  1
-
-	e.border_left   =  2
-	e.border_top    =  2
-	e.border_right  = 10
-	e.border_bottom =  1
-	e.border_color_left   = 0xff00ffff
-	e.border_color_top    = 0xffff00ff
-	e.border_color_right  = 0x008800ff
-	e.border_color_bottom = 0x888888ff
-	e.corner_radius_top_left = 20
-
-	e.background_type = ll.BACKGROUND_TYPE_LINEAR_GRADIENT
-	e.background_gradient_y2 = 100
-	e:set_background_gradient_color_stops_offset(0, 0)
-	e:set_background_gradient_color_stops_offset(1, 1)
-	e:set_background_gradient_color_stops_color(0, 0xff0000ff)
-	e:set_background_gradient_color_stops_color(1, 0x0000ffff)
-	e.background_gradient_cx1 = 1
-
-	e.background_type = ll.BACKGROUND_TYPE_COLOR
-	e.background_color = 0x000000ff --0x336699ff
-
-	e.shadow_y = 10
-	e.shadow_x = 10
-	e.shadow_blur = 5
-	e.shadow_passes = 3
-	e.shadow_color = 0x000000ff
-
-	if not self.xx then
-		e:set_text_utf8(s, -1)
-		e:set_text_span_script   (0, 'Zyyy')
-		e:set_text_span_lang     (0, 'en')
-		e:set_text_span_font_id  (0, font_id)
-		e:set_text_span_font_size(0, 14)
-		e:set_text_span_color    (0, 0xffffffff)
-		self.xx = true
-	end
-
-	e.text_align_y = ll.ALIGN_TOP
-	e.text_align_x = ll.ALIGN_CENTER
-
 	local w, h = self:client_size()
 	e:sync(w - 20, h - 20)
 	e:draw(cr)
 
+	--e1:set_text_utf8('', -1)
 	--e:clear_text_runs()
 end
 
@@ -107,7 +115,8 @@ function win:keyup(key)
 end
 
 app:run()
-man:dump_stats()
-man:free()
 
+llib:dump_stats()
+llib:free()
 ll.memreport()
+assert(ll.memtotal() == 0)
