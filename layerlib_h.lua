@@ -146,12 +146,12 @@ void Layer_set_bg_cx2(Layer*, double);
 void Layer_set_bg_cy2(Layer*, double);
 void Layer_set_bg_r1(Layer*, double);
 void Layer_set_bg_r2(Layer*, double);
-int32_t Layer_get_bg_color_stops_count(Layer*);
-void Layer_set_bg_color_stops_count(Layer*, int32_t);
-uint32_t Layer_get_bg_color_stops_color(Layer*, int32_t);
-double Layer_get_bg_color_stops_offset(Layer*, int32_t);
-void Layer_set_bg_color_stops_color(Layer*, int32_t, uint32_t);
-void Layer_set_bg_color_stops_offset(Layer*, int32_t, double);
+int32_t Layer_get_bg_color_stop_count(Layer*);
+void Layer_set_bg_color_stop_count(Layer*, int32_t);
+uint32_t Layer_get_bg_color_stop_color(Layer*, int32_t);
+double Layer_get_bg_color_stop_offset(Layer*, int32_t);
+void Layer_set_bg_color_stop_color(Layer*, int32_t, uint32_t);
+void Layer_set_bg_color_stop_offset(Layer*, int32_t, double);
 Bitmap* Layer_get_bg_image(Layer*);
 void Layer_set_bg_image(Layer*, Bitmap*);
 double Layer_get_bg_x(Layer*);
@@ -189,7 +189,7 @@ void Layer_set_text_utf8(Layer*, const char *, int32_t);
 int32_t Layer_get_text_maxlen(Layer*);
 void Layer_set_text_maxlen(Layer*, int32_t);
 int32_t Layer_get_text_span_count(Layer*);
-void Layer_clear_text_spans(Layer*);
+void Layer_set_text_span_count(Layer*, int32_t);
 int32_t Layer_get_text_span_feature_count(Layer*, int32_t);
 void Layer_clear_text_span_features(Layer*, int32_t);
 bool Layer_get_text_span_feature(Layer*, int32_t, int32_t, const char *, int32_t);
@@ -366,7 +366,7 @@ local getters = {
 	bg_cy2 = C.Layer_get_bg_cy2,
 	bg_r1 = C.Layer_get_bg_r1,
 	bg_r2 = C.Layer_get_bg_r2,
-	bg_color_stops_count = C.Layer_get_bg_color_stops_count,
+	bg_color_stop_count = C.Layer_get_bg_color_stop_count,
 	bg_image = C.Layer_get_bg_image,
 	bg_x = C.Layer_get_bg_x,
 	bg_y = C.Layer_get_bg_y,
@@ -471,7 +471,7 @@ local setters = {
 	bg_cy2 = C.Layer_set_bg_cy2,
 	bg_r1 = C.Layer_set_bg_r1,
 	bg_r2 = C.Layer_set_bg_r2,
-	bg_color_stops_count = C.Layer_set_bg_color_stops_count,
+	bg_color_stop_count = C.Layer_set_bg_color_stop_count,
 	bg_image = C.Layer_set_bg_image,
 	bg_x = C.Layer_set_bg_x,
 	bg_y = C.Layer_set_bg_y,
@@ -488,6 +488,7 @@ local setters = {
 	shadow_blur = C.Layer_set_shadow_blur,
 	shadow_passes = C.Layer_set_shadow_passes,
 	text_maxlen = C.Layer_set_text_maxlen,
+	text_span_count = C.Layer_set_text_span_count,
 	text_align_x = C.Layer_set_text_align_x,
 	text_align_y = C.Layer_set_text_align_y,
 	text_caret_width = C.Layer_set_text_caret_width,
@@ -529,13 +530,12 @@ local methods = {
 	sync_layout_separate_axes = C.Layer_sync_layout_separate_axes,
 	get_border_dash = C.Layer_get_border_dash,
 	set_border_dash = C.Layer_set_border_dash,
-	get_bg_color_stops_color = C.Layer_get_bg_color_stops_color,
-	get_bg_color_stops_offset = C.Layer_get_bg_color_stops_offset,
-	set_bg_color_stops_color = C.Layer_set_bg_color_stops_color,
-	set_bg_color_stops_offset = C.Layer_set_bg_color_stops_offset,
+	get_bg_color_stop_color = C.Layer_get_bg_color_stop_color,
+	get_bg_color_stop_offset = C.Layer_get_bg_color_stop_offset,
+	set_bg_color_stop_color = C.Layer_set_bg_color_stop_color,
+	set_bg_color_stop_offset = C.Layer_set_bg_color_stop_offset,
 	set_text_utf32 = C.Layer_set_text_utf32,
 	set_text_utf8 = C.Layer_set_text_utf8,
-	clear_text_spans = C.Layer_clear_text_spans,
 	get_text_span_feature_count = C.Layer_get_text_span_feature_count,
 	clear_text_span_features = C.Layer_clear_text_span_features,
 	get_text_span_feature = C.Layer_get_text_span_feature,

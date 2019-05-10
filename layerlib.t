@@ -1,10 +1,6 @@
 
-local low = require'low'
+setfenv(1, require'low'.module())
 require'memcheck'
-local layerlib = {__index = low}
-layerlib.layerlib = layerlib
-setmetatable(layerlib, layerlib)
-setfenv(1, layerlib)
 require'cairolib'
 require'trlib_paint_cairo'
 tr = require'trlib'
@@ -65,7 +61,7 @@ ALIGN_BASELINE      = tr.ALIGN_MAX + 7
 local function map_enum(src_prefix, dst_prefix)
 	for k,v in pairs(C) do
 		local op = k:match('^'..src_prefix..'(.*)')
-		if op then layerlib[dst_prefix..op] = v end
+		if op then _M[dst_prefix..op] = v end
 	end
 end
 map_enum('CAIRO_OPERATOR_', 'OPERATOR_')
@@ -268,18 +264,18 @@ terra Background:set_color(v: color)
 	end
 end
 
-terra Background:get_color_stops_count()
+terra Background:get_color_stop_count()
 	return iif((self.type and BG_GRADIENT) ~= 0,
 		self.pattern.gradient.color_stops.len, 0)
 end
 
-terra Background:set_color_stops_count(n: int)
+terra Background:set_color_stop_count(n: int)
 	if (self.type and BG_GRADIENT) ~= 0 then
 		self.pattern.gradient.color_stops:setlen(n, ColorStop{0, 0})
 	end
 end
 
-terra Background:get_color_stops_color(i: int)
+terra Background:get_color_stop_color(i: int)
 	if (self.type and BG_GRADIENT) ~= 0 then
 		var cs = self.pattern.gradient.color_stops:at(i, nil)
 		return iif(cs ~= nil, cs.color.uint, 0)
@@ -288,7 +284,7 @@ terra Background:get_color_stops_color(i: int)
 	end
 end
 
-terra Background:get_color_stops_offset(i: int)
+terra Background:get_color_stop_offset(i: int)
 	if (self.type and BG_GRADIENT) ~= 0 then
 		var cs = self.pattern.gradient.color_stops:at(i, nil)
 		return iif(cs ~= nil, cs.offset, 0)
@@ -297,13 +293,13 @@ terra Background:get_color_stops_offset(i: int)
 	end
 end
 
-terra Background:set_color_stops_color(i: int, color: uint32)
+terra Background:set_color_stop_color(i: int, color: uint32)
 	if (self.type and BG_GRADIENT) ~= 0 then
 		self.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).color.uint = color
 	end
 end
 
-terra Background:set_color_stops_offset(i: int, offset: num)
+terra Background:set_color_stop_offset(i: int, offset: num)
 	if (self.type and BG_GRADIENT) ~= 0 then
 		self.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).offset = offset
 	end
@@ -681,7 +677,9 @@ terra Layer:set_parent(parent: &Layer)
 	self:move(parent, maxint)
 end
 
-terra Layer:get_child_count() return self.children.len end
+terra Layer:get_child_count()
+	return self.children.len
+end
 
 terra Layer:set_child_count(n: int)
 	var new_elements = self.children:setlen(n)
@@ -2891,15 +2889,14 @@ terra Lib:init()
 	self.top_layers:init()
 	self.text_renderer:init()
 	self.grid_occupied:init()
-	self.default_text_span:init()
 	self.default_layout_solver = &null_layout
+	self.default_text_span = [tr.Span.empty]
 end
 
 terra Lib:free()
 	self.top_layers:free()
 	self.text_renderer:free()
 	self.grid_occupied:free()
-	self.default_text_span:free()
 end
 
 --text rendering engine configuration
@@ -2924,7 +2921,7 @@ end
 
 --self-alloc API for ffi
 
-terra layerlib.new()
+terra _M.new()
 	return low.new(Lib)
 end
 
@@ -3093,13 +3090,13 @@ terra Layer:set_bg_cy2(cy2: num) [set(self, 'cy2', cy2)] end
 terra Layer:set_bg_r1 (r1 : num) [set(self, 'r1' , r1 )] end
 terra Layer:set_bg_r2 (r2 : num) [set(self, 'r2' , r2 )] end
 
-terra Layer:get_bg_color_stops_count() return self.bg.color_stops_count end
-terra Layer:set_bg_color_stops_count(n: int) self.bg.color_stops_count = n end
+terra Layer:get_bg_color_stop_count() return self.bg.color_stop_count end
+terra Layer:set_bg_color_stop_count(n: int) self.bg.color_stop_count = n end
 
-terra Layer:get_bg_color_stops_color (i: int) return self.bg:get_color_stops_color(i) end
-terra Layer:get_bg_color_stops_offset(i: int) return self.bg:get_color_stops_offset(i) end
-terra Layer:set_bg_color_stops_color (i: int, color: uint32) self.bg:set_color_stops_color(i, color) end
-terra Layer:set_bg_color_stops_offset(i: int, offset: num) self.bg:set_color_stops_offset(i, offset) end
+terra Layer:get_bg_color_stop_color (i: int) return self.bg:get_color_stop_color(i) end
+terra Layer:get_bg_color_stop_offset(i: int) return self.bg:get_color_stop_offset(i) end
+terra Layer:set_bg_color_stop_color (i: int, color: uint32) self.bg:set_color_stop_color(i, color) end
+terra Layer:set_bg_color_stop_offset(i: int, offset: num) self.bg:set_color_stop_offset(i, offset) end
 terra Layer:get_bg_image() return self.bg.image end
 terra Layer:set_bg_image(v: &Bitmap) self.bg.image = v end
 
@@ -3163,12 +3160,15 @@ terra Layer:set_text_maxlen(maxlen: int) self.text.layout.maxlen = maxlen end
 
 --text spans
 
-terra Layer:get_text_span_count() return self.text.layout.spans.len end
-terra Layer:clear_text_spans()
-	if self.text.layout.spans.len > 0 then
-		self.text.layout.spans.len = 0
-		self:unshape()
-	end
+terra Layer:get_text_span_count()
+	return self.text.layout.spans.len
+end
+
+terra Layer:set_text_span_count(n: int)
+	var spans = &self.text.layout.spans
+	if spans.len == n then return end
+	spans:setlen(n, self.lib.default_text_span)
+	self:unshape()
 end
 
 terra Layer:span(i: int)
@@ -3191,7 +3191,7 @@ terra Layer:get_text_span_feature_count(i: int)
 end
 terra Layer:clear_text_span_features(i: int)
 	var span = self.text.layout.spans:at(i, nil)
-	if span ~= nil then
+	if span ~= nil and span.features.len > 0 then
 		span.features.len = 0
 		self:unshape()
 	end
@@ -3371,9 +3371,9 @@ function build()
 		public(memreport)
 	end
 
-	public:getenums(layerlib)
+	public:getenums(_M)
 
-	public(layerlib.new, 'layerlib')
+	public(_M.new, 'layerlib')
 
 	public(Lib, {
 
@@ -3557,12 +3557,12 @@ function build()
 		set_bg_r1 =1,
 		set_bg_r2 =1,
 
-		get_bg_color_stops_count=1,
-		set_bg_color_stops_count=1,
-		get_bg_color_stops_color=1,
-		set_bg_color_stops_color=1,
-		get_bg_color_stops_offset=1,
-		set_bg_color_stops_offset=1,
+		get_bg_color_stop_count=1,
+		set_bg_color_stop_count=1,
+		get_bg_color_stop_color=1,
+		set_bg_color_stop_color=1,
+		get_bg_color_stop_offset=1,
+		set_bg_color_stop_offset=1,
 
 		get_bg_image=1,
 		set_bg_image=1,
@@ -3616,7 +3616,7 @@ function build()
 		set_text_maxlen=1,
 
 		get_text_span_count=1,
-		clear_text_spans=1,
+		set_text_span_count=1,
 
 		get_text_span_feature_count=1,
 		clear_text_span_features=1,
@@ -3750,4 +3750,4 @@ if not ... then
 	build()
 end
 
-return layerlib
+return _M

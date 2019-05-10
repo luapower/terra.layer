@@ -56,10 +56,10 @@ e.corner_radius_top_left = 20
 
 e.bg_type = ll.BG_LINEAR_GRADIENT
 e.bg_y2 = 100
-e:set_bg_color_stops_offset(0, 0)
-e:set_bg_color_stops_offset(1, 1)
-e:set_bg_color_stops_color(0, 0xff0000ff)
-e:set_bg_color_stops_color(1, 0x0000ffff)
+e:set_bg_color_stop_offset(0, 0)
+e:set_bg_color_stop_offset(1, 1)
+e:set_bg_color_stop_color(0, 0xff0000ff)
+e:set_bg_color_stop_color(1, 0x0000ffff)
 e.bg_cx1 = 1
 
 e.shadow_y = 10
