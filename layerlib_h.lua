@@ -177,11 +177,25 @@ double Layer_get_shadow_y(Layer*);
 cairo_argb32_color_t Layer_get_shadow_color(Layer*);
 uint8_t Layer_get_shadow_blur(Layer*);
 uint8_t Layer_get_shadow_passes(Layer*);
+bool Layer_get_shadow_inset(Layer*);
 void Layer_set_shadow_x(Layer*, double);
 void Layer_set_shadow_y(Layer*, double);
 void Layer_set_shadow_color(Layer*, uint32_t);
 void Layer_set_shadow_blur(Layer*, uint8_t);
 void Layer_set_shadow_passes(Layer*, uint8_t);
+void Layer_set_shadow_inset(Layer*, bool);
+double Layer_get_content_shadow_x(Layer*);
+double Layer_get_content_shadow_y(Layer*);
+cairo_argb32_color_t Layer_get_content_shadow_color(Layer*);
+uint8_t Layer_get_content_shadow_blur(Layer*);
+uint8_t Layer_get_content_shadow_passes(Layer*);
+bool Layer_get_content_shadow_inset(Layer*);
+void Layer_set_content_shadow_x(Layer*, double);
+void Layer_set_content_shadow_y(Layer*, double);
+void Layer_set_content_shadow_color(Layer*, uint32_t);
+void Layer_set_content_shadow_blur(Layer*, uint8_t);
+void Layer_set_content_shadow_passes(Layer*, uint8_t);
+void Layer_set_content_shadow_inset(Layer*, bool);
 uint32_t* Layer_get_text_utf32(Layer*);
 int32_t Layer_get_text_utf32_len(Layer*);
 void Layer_set_text_utf32(Layer*, uint32_t*, int32_t);
@@ -193,7 +207,7 @@ void Layer_set_text_span_count(Layer*, int32_t);
 int32_t Layer_get_text_span_feature_count(Layer*, int32_t);
 void Layer_clear_text_span_features(Layer*, int32_t);
 bool Layer_get_text_span_feature(Layer*, int32_t, int32_t, const char *, int32_t);
-bool Layer_set_text_span_feature(Layer*, int32_t, int32_t, const char *, int32_t);
+bool Layer_add_text_span_feature(Layer*, int32_t, const char *, int32_t);
 int32_t Layer_get_text_span_offset(Layer*, int32_t);
 float Layer_get_text_span_font_size(Layer*, int32_t);
 uint32_t Layer_get_text_span_dir(Layer*, int32_t);
@@ -382,6 +396,13 @@ local getters = {
 	shadow_color = C.Layer_get_shadow_color,
 	shadow_blur = C.Layer_get_shadow_blur,
 	shadow_passes = C.Layer_get_shadow_passes,
+	shadow_inset = C.Layer_get_shadow_inset,
+	content_shadow_x = C.Layer_get_content_shadow_x,
+	content_shadow_y = C.Layer_get_content_shadow_y,
+	content_shadow_color = C.Layer_get_content_shadow_color,
+	content_shadow_blur = C.Layer_get_content_shadow_blur,
+	content_shadow_passes = C.Layer_get_content_shadow_passes,
+	content_shadow_inset = C.Layer_get_content_shadow_inset,
 	text_utf32 = C.Layer_get_text_utf32,
 	text_utf32_len = C.Layer_get_text_utf32_len,
 	text_maxlen = C.Layer_get_text_maxlen,
@@ -487,6 +508,13 @@ local setters = {
 	shadow_color = C.Layer_set_shadow_color,
 	shadow_blur = C.Layer_set_shadow_blur,
 	shadow_passes = C.Layer_set_shadow_passes,
+	shadow_inset = C.Layer_set_shadow_inset,
+	content_shadow_x = C.Layer_set_content_shadow_x,
+	content_shadow_y = C.Layer_set_content_shadow_y,
+	content_shadow_color = C.Layer_set_content_shadow_color,
+	content_shadow_blur = C.Layer_set_content_shadow_blur,
+	content_shadow_passes = C.Layer_set_content_shadow_passes,
+	content_shadow_inset = C.Layer_set_content_shadow_inset,
 	text_maxlen = C.Layer_set_text_maxlen,
 	text_span_count = C.Layer_set_text_span_count,
 	text_align_x = C.Layer_set_text_align_x,
@@ -539,7 +567,7 @@ local methods = {
 	get_text_span_feature_count = C.Layer_get_text_span_feature_count,
 	clear_text_span_features = C.Layer_clear_text_span_features,
 	get_text_span_feature = C.Layer_get_text_span_feature,
-	set_text_span_feature = C.Layer_set_text_span_feature,
+	add_text_span_feature = C.Layer_add_text_span_feature,
 	get_text_span_offset = C.Layer_get_text_span_offset,
 	get_text_span_font_size = C.Layer_get_text_span_font_size,
 	get_text_span_dir = C.Layer_get_text_span_dir,

@@ -36,25 +36,29 @@ local e = llib:layer(nil)
 e.clip = ll.CLIP_PADDING
 --e.clip = ll.CLIP_NONE
 
-e.padding_left   =  2
-e.padding_top    =  2
-e.padding_right  = 10
-e.padding_bottom =  1
+--e.padding_left   =  2
+--e.padding_top    =  2
+--e.padding_right  =  2
+--e.padding_bottom =  2
 
-e.border_left   =  2
-e.border_top    =  2
-e.border_right  = 10
-e.border_bottom =  1
+--e.border_left   =  2
+--e.border_top    =  2
+--e.border_right  =  2
+--e.border_bottom =  2
 e.border_color_left   = 0xff00ffff
 e.border_color_top    = 0xffff00ff
 e.border_color_right  = 0x008800ff
 e.border_color_bottom = 0x888888ff
-e.corner_radius_top_left = 20
+--e.corner_radius_top_left = 20
 
---e.bg_type = ll.BG_COLOR
---e.bg_color = 0x000022ff --0x336699ff
+e.padding = 20
+e.border = 10
+e.border_color = 0xff0000ff
 
-e.bg_type = ll.BG_LINEAR_GRADIENT
+e.bg_type = ll.BG_COLOR
+e.bg_color = 0x0099ffff --0x336699ff
+
+--e.bg_type = ll.BG_LINEAR_GRADIENT
 e.bg_y2 = 100
 e:set_bg_color_stop_offset(0, 0)
 e:set_bg_color_stop_offset(1, 1)
@@ -64,7 +68,7 @@ e.bg_cx1 = 1
 
 e.shadow_y = 10
 e.shadow_x = 10
-e.shadow_blur = 5
+e.shadow_blur = 10
 e.shadow_passes = 3
 e.shadow_color = 0x000000ff
 
@@ -73,8 +77,8 @@ e.layout_type = ll.LAYOUT_FLEX
 
 local e1, e2 = e:child(0), e:child(1)
 
-e1.border = 10; e1.padding = 10
-e2.border = 10; e2.padding = 10
+e1.border = 10; e1.padding = 20
+e2.border = 10; e2.padding = 20
 e1.border_color = 0xffff00ff
 e2.border_color = 0x00ff00ff
 e1.min_cw = 10; e1.min_ch = 10
@@ -93,15 +97,28 @@ e1:set_text_span_color    (0, 0xffffffff)
 e1.text_align_y = ll.ALIGN_TOP
 e1.text_align_x = ll.ALIGN_CENTER
 
+--e1.visible = false
+--e2.visible = false
+
+--e.shadow_inset = true
+
+e.content_shadow_y = 1
+e.content_shadow_x = 1
+e.content_shadow_blur = 1
+e.content_shadow_passes = 3
+e.content_shadow_color = 0x000000ff
+
 function win:repaint()
 
 	local cr = self:bitmap():cairo()
 
+	cr:identity_matrix()
 	cr:rgba(1, 1, 1, 1)
 	cr:paint()
 
 	local w, h = self:client_size()
-	e:sync(w - 20, h - 20)
+	cr:translate(50, 50)
+	e:sync(w - 100, h - 100)
 	e:draw(cr)
 
 	--e1:set_text_utf8('', -1)

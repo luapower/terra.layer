@@ -7,6 +7,7 @@ tr = require'trlib'
 require'bitmaplib'
 require'boxblurlib'
 require'utf8lib'
+require'box2dlib'
 
 --utils ----------------------------------------------------------------------
 
@@ -21,11 +22,6 @@ terra snap_xw(x: num, w: num, enable: bool)
 	return x1, x2 - x1
 end
 
---offset a rectangle by d (outward if d is positive)
-terra box2d_offset(d: num, x: num, y: num, w: num, h: num)
-	return x - d, y - d, w + 2*d, h + 2*d
-end
-
 --external types -------------------------------------------------------------
 
 color = cairo_argb32_color_t
@@ -34,6 +30,8 @@ pattern = cairo_pattern_t
 context = cairo_t
 surface = cairo_surface_t
 create_surface = cairo_image_surface_create_for_bitmap
+
+rect = rect(num)
 
 Bitmap = bitmap.Bitmap
 
@@ -367,22 +365,18 @@ struct ShadowState {
 	x: num; y: num;
 }
 
-struct Shadow {
+struct Shadow (gettersandsetters) {
 	x: num;
 	y: num;
 	color: color;
 	blur: uint8;
 	passes: uint8;
+	inset: bool;
 	_state: ShadowState;
 }
 
-terra Layer.methods.repaint_shadow :: {&Layer, &Bitmap} -> {}
-
-terra Shadow:init(layer: &Layer)
-	self._state.blur:init(
-		BITMAP_G8,
-		[BlurRepaintFunc]([Layer:getmethod'repaint_shadow']),
-		layer)
+terra Shadow:init(layer: &Layer, repaint_shadow: {&Layer, &Bitmap} -> {})
+	self._state.blur:init(BITMAP_G8, [BlurRepaintFunc](repaint_shadow), layer)
 end
 
 terra Shadow:invalidate()
@@ -395,6 +389,16 @@ end
 terra Shadow:free()
 	self:invalidate()
 	self._state.blur:free()
+end
+
+terra Shadow:visible()
+	return self.blur > 0
+		or self.x ~= 0
+		or self.y ~= 0
+end
+
+terra Shadow:get_spread()
+	return self.passes * self.blur
 end
 
 --text -----------------------------------------------------------------------
@@ -428,7 +432,7 @@ terra Text:free()
 	self.layout:free()
 end
 
---layouts --------------------------------------------------------------------
+--layouting ------------------------------------------------------------------
 
 struct LayoutSolver {
 	type       : enum; --LAYOUT_*
@@ -511,9 +515,9 @@ struct Lib (gettersandsetters) {
 
 --layer ----------------------------------------------------------------------
 
-CLIP_NONE       = 0
-CLIP_PADDING    = 1
-CLIP_BG = 1
+CLIP_NONE    = 0
+CLIP_PADDING = 1
+CLIP_BG      = 1
 
 struct Layer (gettersandsetters) {
 
@@ -543,9 +547,10 @@ struct Layer (gettersandsetters) {
 	border     : Border;
 	bg         : Background;
 	shadow     : Shadow;
+	content_shadow: Shadow;
 	text       : Text;
 
-	--layouting ---------------------------------------------------------------
+	--layouting -------------------
 
 	layout_solver: &LayoutSolver;
 
@@ -594,6 +599,9 @@ terra Layer:get_owner_array()
 	return iif(self.parent ~= nil, &self.parent.children, &self.lib.top_layers)
 end
 
+terra Layer.methods.repaint_shadow :: {&Layer, &Bitmap} -> {}
+terra Layer.methods.repaint_content_shadow :: {&Layer, &Bitmap} -> {}
+
 terra Layer:init(lib: &Lib, parent: &Layer)
 	fill(self)
 	self.lib = lib
@@ -608,7 +616,8 @@ terra Layer:init(lib: &Lib, parent: &Layer)
 	self.transform:init()
 	self.border:init()
 	self.bg:init()
-	self.shadow:init(self)
+	self.shadow:init(self, [Layer.methods.repaint_shadow])
+	self.content_shadow:init(self, [Layer.methods.repaint_content_shadow])
 	self.text:init(&lib.text_renderer)
 
 	self.align_items_x = ALIGN_STRETCH
@@ -625,6 +634,7 @@ terra Layer:free()
 	self.border:free()
 	self.bg:free()
 	self.shadow:free()
+	self.content_shadow:free()
 	self.text:free()
 	self:free_layout()
 	realloc(self, 0)
@@ -639,6 +649,11 @@ end
 terra Layer:free_and_dealloc()
 	self.owner_array:remove(self.owner_array:find(self))
 end
+
+--layer invalidation fw. decl.
+
+terra Layer.methods.size_changed :: {&Layer} -> {}
+terra Layer.methods.unwrap :: {&Layer} -> {}
 
 --layer hierarchy ------------------------------------------------------------
 
@@ -695,8 +710,6 @@ end
 
 --layer geometry -------------------------------------------------------------
 
-terra Layer.methods.size_changed :: {&Layer} -> {}
-
 terra Layer:get_x() return self.x end
 terra Layer:get_y() return self.y end
 terra Layer:get_w() return self._w end
@@ -704,8 +717,20 @@ terra Layer:get_h() return self._h end
 
 terra Layer:set_x(v: num) self.x = v end
 terra Layer:set_y(v: num) self.y = v end
-terra Layer:set_w(v: num) self._w = v; self:size_changed() end
-terra Layer:set_h(v: num) self._h = v; self:size_changed() end
+terra Layer:set_w(v: num)
+	v = max(v, 0)
+	if self._w ~= v then
+		self._w = v
+		self:size_changed()
+	end
+end
+terra Layer:set_h(v: num)
+	v = max(v, 0)
+	if self._h ~= v then
+		self._h = v
+		self:size_changed()
+	end
+end
 
 terra Layer:get_padding_left  () return self.padding_left   end
 terra Layer:get_padding_right () return self.padding_right  end
@@ -724,19 +749,19 @@ terra Layer:set_padding(v: num)
 	self.padding_bottom = v
 end
 
-terra Layer:get_px(): num return self.padding_left end
-terra Layer:get_py(): num return self.padding_top end
-terra Layer:get_pw(): num return self.padding_left + self.padding_right end
-terra Layer:get_ph(): num return self.padding_top + self.padding_bottom end
+terra Layer:get_px() return self.padding_left end
+terra Layer:get_py() return self.padding_top end
+terra Layer:get_pw() return self.padding_left + self.padding_right end
+terra Layer:get_ph() return self.padding_top + self.padding_bottom end
 
-terra Layer:get_cw(): num return self.w - self.pw end
-terra Layer:get_ch(): num return self.h - self.ph end
+terra Layer:get_cw() return self.w - self.pw end
+terra Layer:get_ch() return self.h - self.ph end
 
 terra Layer:set_cw(cw: num) self.w = cw + (self.w - self.cw) end
 terra Layer:set_ch(ch: num) self.h = ch + (self.h - self.ch) end
 
-terra Layer:get_cx(): num return self.x + self.padding_left end
-terra Layer:get_cy(): num return self.y + self.padding_top end
+terra Layer:get_cx() return self.x + self.padding_left end
+terra Layer:get_cy() return self.y + self.padding_top end
 
 terra Layer:set_cx(cx: num) self.x = cx - self.w / 2 end
 terra Layer:set_cy(cy: num) self.y = cy - self.h / 2 end
@@ -745,6 +770,17 @@ terra Layer:snapx(x: num) return snapx(x, self.snap_x) end
 terra Layer:snapy(y: num) return snapx(y, self.snap_y) end
 terra Layer:snapxw(x: num, w: num) return snap_xw(x, w, self.snap_x) end
 terra Layer:snapyh(y: num, h: num) return snap_xw(y, h, self.snap_y) end
+
+terra Layer:padding_rect() --in box space
+	var px1 = self.padding_left
+	var py1 = self.padding_top
+	var px2 = self.padding_right
+	var py2 = self.padding_bottom
+	return
+		px1, py1,
+		self.w - (px1 + px2),
+		self.h - (py1 + py2)
+end
 
 --layer relative geometry & matrix -------------------------------------------
 
@@ -856,12 +892,12 @@ terra Layer:border_rect(offset: num, size_offset: num)
 	var w1, h1, w2, h2 = self.border:edge_widths(offset, self.w, self.h)
 	var w = self.w - w2 - w1
 	var h = self.h - h2 - h1
-	return box2d_offset(size_offset, w1, h1, w, h)
+	return rect.offset(size_offset, w1, h1, w, h)
 end
 
 --corner radius at pixel offset from the stroke's center on one dimension.
 local terra offset_radius(r: num, o: num)
-	return iif(r > 0, max(0.0, r + o), 0.0)
+	return iif(r > 0, max(.0, r + o), .0)
 end
 
 --border rect at %-offset in border width, plus radii of rounded corners.
@@ -918,8 +954,12 @@ terra Layer:border_round_rect(offset: num, size_offset: num)
 end
 
 --De Casteljau split of a cubic bezier at time t (from path2d).
-local terra bezier_split(first: bool, t: num,
-	x1: num, y1: num, x2: num, y2: num, x3: num, y3: num, x4: num, y4: num
+local terra bezier_split(
+	first: bool, t: num,
+	x1: num, y1: num,
+	x2: num, y2: num,
+	x3: num, y3: num,
+	x4: num, y4: num
 )
 	var mt = 1-t
 	var x12 = x1 * mt + x2 * t
@@ -1113,7 +1153,7 @@ terra Layer:draw_border(cr: &context)
 	end
 end
 
---layer bg drawing ---------------------------------------------------
+--background drawing ---------------------------------------------------------
 
 terra Layer:bg_visible()
 	return self.bg.type ~= BG_NONE
@@ -1183,77 +1223,141 @@ terra Layer:size_changed()
 	self:unwrap()
 end
 
-terra Layer:shadow_visible()
-	return self.shadow.blur > 0 or self.shadow.x ~= 0.0 or self.shadow.y ~= 0.0
-end
-
 terra Layer:shadow_spread()
-	return self.shadow.passes * self.shadow.blur
-end
-
-terra Layer:shadow_bitmap_rect()
-	var spread = self:shadow_spread()
-	if self:border_visible() then
-		return self:border_rect(1, spread)
+	if self.shadow.inset then
+		return max(abs(self.shadow.x), abs(self.shadow.y))
 	else
-		return self:bg_rect(spread)
+		return self.shadow.spread
 	end
 end
 
+terra Layer:shadow_bitmap_rect()
+	var size = self:shadow_spread()
+	if self:border_visible() then
+		return self:border_rect(iif(self.shadow.inset, -1, 1), size)
+	else
+		return self:bg_rect(size)
+	end
+end
+
+--[[
 terra Layer:shadow_round_rect()
 	var size = self:shadow_spread()
 	if self:border_visible() then
-		return self:border_round_rect(1, size)
+		return self:border_round_rect(iif(self.shadow.inset, -1, 1), size)
 	else
 		return self:bg_round_rect(size)
 	end
 end
+]]
 
 terra Layer:shadow_path(cr: &context)
 	if self:border_visible() then
-		self:border_path(cr, 1, 0)
+		self:border_path(cr, iif(self.shadow.inset, -1, 1), 0)
 	else
 		self:bg_path(cr, 0)
 	end
 end
 
-terra Layer:repaint_shadow(bmp: &Bitmap)
-	var sr = bmp:surface(); defer sr:free()
-	var cr = sr:context(); defer cr:free()
+terra Layer:shadow_clip_path(cr: &context)
+	self:shadow_path(cr)
+	if not self.shadow.inset then
+		cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
+		var m = cr:matrix()
+		cr:identity_matrix()
+		cr:rectangle(0, 0, cr:target():width(), cr:target():height())
+		cr:matrix(&m)
+	end
+end
+
+terra Layer:draw_shadow_shape(cr: &context)
+	var s = &self.shadow
 	cr:operator(CAIRO_OPERATOR_SOURCE)
 	cr:rgba(0, 0, 0, 0)
 	cr:paint()
-	cr:translate(-self.shadow._state.x, -self.shadow._state.y)
+	cr:translate(-s._state.x, -s._state.y)
 	cr:new_path()
 	self:shadow_path(cr)
+	if s.inset then
+		cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
+		cr:identity_matrix()
+		cr:rectangle(0, 0, cr:target():width(), cr:target():height())
+	end
 	cr:operator(self.operator)
 	cr:rgba(0, 0, 0, 1)
 	cr:fill()
 end
 
+terra Layer:repaint_shadow(bmp: &Bitmap)
+	var sr = bmp:surface(); defer sr:free()
+	var cr = sr:context(); defer cr:free()
+	self:draw_shadow_shape(cr)
+end
+
 terra Layer:draw_shadow(cr: &context)
-	if not self:shadow_visible() then return end
+	var s = &self.shadow
+	if not s:visible() then return end
 	var bx, by, bw, bh = self:shadow_bitmap_rect()
-	self.shadow._state.x = bx
-	self.shadow._state.y = by
-	if self.shadow._state.blurred_surface == nil then
-		var bmp = self.shadow._state.blur:blur(
-			bw, bh, self.shadow.blur, self.shadow.passes)
-		self.shadow._state.blurred_surface = bmp:surface()
+	if not (bw > 0 and bh > 0) then return end
+	s._state.x = bx
+	s._state.y = by
+	if s._state.blurred_surface == nil then
+		var bmp = s._state.blur:blur(
+			bw, bh, s.blur, s.passes)
+		s._state.blurred_surface = bmp:surface()
 	end
-	var sx = bx + self.shadow.x
-	var sy = by + self.shadow.y
-	cr:rgba(self.shadow.color)
-	cr:mask(self.shadow._state.blurred_surface, sx, sy)
+	var sx = bx + s.x
+	var sy = by + s.y
+	cr:new_path()
+	cr:save()
+	self:shadow_clip_path(cr)
+	cr:clip()
+	cr:rgba(s.color)
+	cr:mask(s._state.blurred_surface, sx, sy)
+	cr:restore()
+end
+
+--content shadow drawing -----------------------------------------------------
+
+terra Layer.methods.content_bbox :: {&Layer, bool} -> {num, num, num, num}
+
+terra Layer:repaint_content_shadow(bmp: &Bitmap)
+	var sr = bmp:surface(); defer sr:free()
+	var cr = sr:context(); defer cr:free()
+	var s = &self.content_shadow
+	cr:translate(-s._state.x, -s._state.y)
+	self:draw_content(cr)
+end
+
+terra Layer:content_shadow_bitmap_rect()
+	var x, y, w, h = self:content_bbox(true)
+	return rect.offset(self.content_shadow.spread, x, y, w, h)
+end
+
+terra Layer:draw_content_shadow(cr: &context)
+	var s = &self.content_shadow
+	if not s:visible() then return end
+	var bx, by, bw, bh = self:content_shadow_bitmap_rect()
+	if not (bw > 0 and bh > 0) then return end
+	s._state.x = bx
+	s._state.y = by
+	if s._state.blurred_surface == nil then
+		var bmp = s._state.blur:blur(bw, bh, s.blur, s.passes)
+		s._state.blurred_surface = bmp:surface()
+	end
+	var sx = bx + s.x
+	var sy = by + s.y
+	cr:rgba(s.color)
+	cr:mask(s._state.blurred_surface, sx, sy)
 end
 
 --text drawing ---------------------------------------------------------------
 
 terra Layer:text_visible()
-	return self.text.layout.spans.len > 0
+	return self.text.layout.text.len > 0
+		and self.text.layout.spans.len > 0
 		and self.text.layout.spans:at(0).font_id ~= -1
 		and self.text.layout.spans:at(0).font_size > 0
-		and self.text.layout.text.len > 0
 end
 
 terra Layer:unshape()
@@ -1299,14 +1403,12 @@ terra Layer:draw_text(cr: &context)
 	self.text.layout:paint(cr)
 end
 
---[[
-function layer:text_bbox()
+terra Layer:text_bbox()
 	if not self:text_visible() then
-		return 0, 0, 0, 0
+		return .0, .0, .0, .0
 	end
-	return self.text.segments:bbox()
+	return self.text.layout:bbox() --float->double conversion!
 end
-]]
 
 --text caret & selection drawing ---------------------------------------------
 
@@ -1367,18 +1469,52 @@ end
 terra Layer:draw_text_selection(cr: &context) end
 terra Layer:draw_caret(cr: &context) end
 
---layer drawing --------------------------------------------------------------
+--layer bbox -----------------------------------------------------------------
 
---[[
-function layer:children_bbox(strict)
-	local x, y, w, h = 0, 0, 0, 0
-	for _,layer in ipairs(self) do
-		x, y, w, h = box2d.bounding_box(x, y, w, h,
-			layer:bbox(strict))
+terra Layer:children_bbox(strict: bool)
+	var bb = rect{0, 0, 0, 0}
+	for layer in self do
+		bb:bbox(rect(layer:bbox(strict)))
 	end
-	return x, y, w, h
+	return bb()
 end
-]]
+
+terra Layer:content_bbox(strict: bool)
+	var bb = rect{0, 0, 0, 0}
+	bb:bbox(rect(self:children_bbox(strict)))
+	bb:bbox(rect(self:text_bbox()))
+	return bb()
+end
+
+terra Layer:bbox(strict: bool)
+	var bb = rect{0, 0, 0, 0}
+	if self.visible then
+		if strict or self.clip == CLIP_NONE then
+			var cbb = rect(self:content_bbox(strict))
+			inc(cbb.x, self.cx)
+			inc(cbb.y, self.cy)
+			if self.clip ~= CLIP_NONE then
+				cbb:intersect(rect(self:bg_rect(0)))
+				if self.clip == CLIP_PADDING then
+					cbb:intersect(rect(self:padding_rect()))
+				end
+			end
+			bb:bbox(cbb)
+		end
+		if (not strict and self.clip ~= CLIP_NONE)
+			or self.bg.hittable
+			or self:bg_visible()
+		then
+			bb:bbox(rect(self:bg_rect(0)))
+		end
+		if self:border_visible() then
+			bb:bbox(rect(self:border_rect(1, 0)))
+		end
+	end
+	return bb()
+end
+
+--layer drawing --------------------------------------------------------------
 
 terra Layer.methods.draw :: {&Layer, &context} -> {}
 
@@ -1416,11 +1552,6 @@ function Layer:hit_test_content(x, y, reason) --called in own content space
 	end
 	return widget, area
 end
-
-function Layer:content_bbox(strict)
-	local x, y, w, h = self:children_bbox(strict)
-	return box2d.bounding_box(x, y, w, h, self:text_bbox())
-end
 ]]
 
 local ft_lib = global(FT_Library, nil)
@@ -1444,7 +1575,9 @@ terra Layer:draw(cr: &context) --called in parent's content space; child intf.
 
 	var bg = self:bg_visible()
 
-	self:draw_shadow(cr)
+	if not self.shadow.inset then
+		self:draw_shadow(cr)
+	end
 
 	var clip = bg or self.clip ~= CLIP_NONE
 	if clip then
@@ -1454,6 +1587,9 @@ terra Layer:draw(cr: &context) --called in parent's content space; child intf.
 		cr:clip()
 		if bg then
 			self:paint_bg(cr)
+		end
+		if self.shadow.inset then
+			self:draw_shadow(cr)
 		end
 		if self.clip == CLIP_PADDING then
 			cr:new_path()
@@ -1471,6 +1607,7 @@ terra Layer:draw(cr: &context) --called in parent's content space; child intf.
 	end
 
 	cr:translate(self.cx, self.cy)
+	self:draw_content_shadow(cr)
 	self:draw_content(cr)
 	cr:translate(-self.cx, -self.cy)
 	if clip then
@@ -1756,25 +1893,25 @@ local function stretch_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 		--, set_item_x, set_moving_item_x
 	)
 		--compute the fraction representing the total width.
-		var total_fr: num = 0.0
+		var total_fr: num = .0
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
-				total_fr = total_fr + max(0.0, item.fr)
+				total_fr = total_fr + max(.0, item.fr)
 			end
 		end
 		total_fr = max(1.0, total_fr) --treat sub-unit fractions like css flex
 
 		--compute the total overflow width and total free width.
-		var total_overflow_w: num = 0.0
-		var total_free_w: num = 0.0
+		var total_overflow_w: num = .0
+		var total_free_w: num = .0
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
 				var min_w = item.[_MIN_W]
-				var flex_w = total_w * max(0.0, item.fr) / total_fr
-				var overflow_w = max(0.0, min_w - flex_w)
-				var free_w = max(0.0, flex_w - min_w)
+				var flex_w = total_w * max(.0, item.fr) / total_fr
+				var overflow_w = max(.0, min_w - flex_w)
+				var free_w = max(.0, flex_w - min_w)
 				total_overflow_w = total_overflow_w + overflow_w
 				total_free_w = total_free_w + free_w
 			end
@@ -1802,7 +1939,7 @@ local function stretch_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 		--distribute the overflow to children which have free space to
 		--take it. each child shrinks to take in a part of the overflow
 		--proportional to its percent of free space.
-		var sx: num = 0.0 --stretched x-coord
+		var sx: num = .0 --stretched x-coord
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
@@ -1931,7 +2068,7 @@ local function gen_funcs(X, Y, W, H)
 	local ALIGN_Y = 'align_'..Y
 
 	local terra items_sum_x(self: &Layer, i: int, j: int)
-		var sum_w: num = 0.0
+		var sum_w: num = .0
 		var item_count = 0
 		for i = i, j do
 			var item = self.children(i)
@@ -1944,7 +2081,7 @@ local function gen_funcs(X, Y, W, H)
 	end
 
 	local terra items_max_x(self: &Layer, i: int, j: int)
-		var max_w: num = 0.0
+		var max_w: num = .0
 		var item_count = 0
 		for i = i, j do
 			var item = self.children(i)
@@ -1990,7 +2127,7 @@ local function gen_funcs(X, Y, W, H)
 			return i, self.children.len
 		end
 		var wrap_w = self.[CW]
-		var line_w: num = 0.0
+		var line_w: num = .0
 		for j = i, self.children.len do
 			var layer = self.children(j)
 			if layer.visible then
@@ -2041,7 +2178,7 @@ local function gen_funcs(X, Y, W, H)
 			--wrapping flex (which is a height-in-width-out layout).
 			return 0
 		end
-		var lines_h: num = 0.0
+		var lines_h: num = .0
 		for i, j in linewrap{self} do
 			var line_h, _ = items_min_h(self, i, j, align_baseline)
 			lines_h = lines_h + line_h
@@ -2172,7 +2309,7 @@ local function gen_funcs(X, Y, W, H)
 		elseif align == ALIGN_TOP or align == ALIGN_START then
 			lines_y, line_spacing = 0, 0
 		else
-			var lines_h: num = 0.0
+			var lines_h: num = .0
 			var line_count: int = 0
 			for i, j in linewrap{self} do
 				var line_h, _ = items_min_h(self, i, j, align_baseline)
@@ -2644,7 +2781,7 @@ local function gen_funcs(X, Y, W, H, COL)
 		var fr = self.grid.[COL_FRS] --{fr1, ...}
 
 		--compute the fraction representing the total width.
-		var total_fr: num = 0.0
+		var total_fr: num = .0
 		for layer in self do
 			if layer.inlayout then
 				var col1 = layer.[_COL]
@@ -2700,7 +2837,7 @@ local function gen_funcs(X, Y, W, H, COL)
 					var col_min_w = span_min_w + gap_col1 + gap_col2
 					item._min_w = max(item._min_w, col_min_w)
 				else --merged columns: unmerge
-					var span_fr: num = 0.0
+					var span_fr: num = .0
 					for col = col1, col2 do
 						span_fr = span_fr + fr(col, 1)
 					end
@@ -2708,15 +2845,15 @@ local function gen_funcs(X, Y, W, H, COL)
 						var item = cols:at(col)
 						var col_min_w =
 							fr(col, 1) / span_fr * span_min_w
-							+ iif(col == col1, gap_col1, 0.0)
-							+ iif(col == col2, gap_col2, 0.0)
+							+ iif(col == col1, gap_col1, .0)
+							+ iif(col == col2, gap_col2, .0)
 						item._min_w = max(item._min_w, col_min_w)
 					end
 				end
 			end
 		end
 
-		var min_cw: num = 0.0
+		var min_cw: num = .0
 		for _,item in cols do
 			min_cw = min_cw + item._min_w
 		end
@@ -2741,7 +2878,7 @@ local function gen_funcs(X, Y, W, H, COL)
 	]]
 
 	local terra sum_min_w(cols: arr(GridLayoutCol))
-		var w: num = 0.0
+		var w: num = .0
 		for _,col in cols do
 			w = w + col._min_w
 		end
@@ -2780,7 +2917,7 @@ local function gen_funcs(X, Y, W, H, COL)
 				--TODO: set_item_x, set_moving_item_x
 		end
 
-		var x: num = 0.0
+		var x: num = .0
 		for layer in self do
 			if layer.inlayout then
 
@@ -2791,8 +2928,8 @@ local function gen_funcs(X, Y, W, H, COL)
 				var x1 = col_item1.x
 				var x2 = col_item2.x + col_item2.w
 
-				var gap1: num = iif(col1 ~= 1,        gap_w * .5, 0.0)
-				var gap2: num = iif(col2 ~= cols.len, gap_w * .5, 0.0)
+				var gap1: num = iif(col1 ~= 1,        gap_w * .5, .0)
+				var gap2: num = iif(col2 ~= cols.len, gap_w * .5, .0)
 				x1 = x1 + gap1
 				x2 = x2 - gap2
 
@@ -2921,8 +3058,8 @@ end
 
 --self-alloc API for ffi
 
-terra _M.new()
-	return low.new(Lib)
+local terra new_lib()
+	return new(Lib)
 end
 
 terra Lib:free_and_dealloc()
@@ -3125,16 +3262,32 @@ terra Layer:set_bg_scale_cy    (v: num) self.bg.scale_cy = v end
 do end --shadows
 
 terra Layer:get_shadow_x      () return self.shadow.x end
-terra Layer:get_shadow_y      () return self.shadow.x end
+terra Layer:get_shadow_y      () return self.shadow.y end
 terra Layer:get_shadow_color  () return self.shadow.color end
 terra Layer:get_shadow_blur   () return self.shadow.blur end
 terra Layer:get_shadow_passes () return self.shadow.passes end
+terra Layer:get_shadow_inset  () return self.shadow.inset end
 
 terra Layer:set_shadow_x      (v: num)    self.shadow.x          = v end
 terra Layer:set_shadow_y      (v: num)    self.shadow.y          = v end
 terra Layer:set_shadow_color  (v: uint32) self.shadow.color.uint = v end
 terra Layer:set_shadow_blur   (v: uint8)  self.shadow.blur       = v; self.shadow:invalidate() end
 terra Layer:set_shadow_passes (v: uint8)  self.shadow.passes     = v; self.shadow:invalidate() end
+terra Layer:set_shadow_inset  (v: bool)   self.shadow.inset      = v; self.shadow:invalidate() end
+
+terra Layer:get_content_shadow_x      () return self.content_shadow.x end
+terra Layer:get_content_shadow_y      () return self.content_shadow.y end
+terra Layer:get_content_shadow_color  () return self.content_shadow.color end
+terra Layer:get_content_shadow_blur   () return self.content_shadow.blur end
+terra Layer:get_content_shadow_passes () return self.content_shadow.passes end
+terra Layer:get_content_shadow_inset  () return self.content_shadow.inset end
+
+terra Layer:set_content_shadow_x      (v: num)    self.content_shadow.x          = v end
+terra Layer:set_content_shadow_y      (v: num)    self.content_shadow.y          = v end
+terra Layer:set_content_shadow_color  (v: uint32) self.content_shadow.color.uint = v end
+terra Layer:set_content_shadow_blur   (v: uint8)  self.content_shadow.blur       = v; self.content_shadow:invalidate() end
+terra Layer:set_content_shadow_passes (v: uint8)  self.content_shadow.passes     = v; self.content_shadow:invalidate() end
+terra Layer:set_content_shadow_inset  (v: bool)   self.content_shadow.inset      = v; self.content_shadow:invalidate() end
 
 do end --text
 
@@ -3205,9 +3358,10 @@ terra Layer:get_text_span_feature(span_i: int, feat_i: int, buf: &char, len: int
 	return false
 end
 local default_feat = `hb_feature_t {0, 0, 0, 0}
-terra Layer:set_text_span_feature(span_i: int, feat_i: int, s: rawstring, len: int)
-	var feat = self:new_span(span_i).features:set(feat_i, default_feat, default_feat)
-	if hb_feature_from_string(s, len, feat) ~= 0 then
+terra Layer:add_text_span_feature(span_i: int, s: rawstring, len: int)
+	var feat: hb_feature_t
+	if hb_feature_from_string(s, len, &feat) ~= 0 then
+		self:new_span(span_i).features:add(feat)
 		self:unshape()
 		return true
 	else
@@ -3373,7 +3527,7 @@ function build()
 
 	public:getenums(_M)
 
-	public(_M.new, 'layerlib')
+	public(new_lib, 'layerlib')
 
 	public(Lib, {
 
@@ -3598,12 +3752,28 @@ function build()
 		get_shadow_color  =1,
 		get_shadow_blur   =1,
 		get_shadow_passes =1,
+		get_shadow_inset  =1,
 
 		set_shadow_x      =1,
 		set_shadow_y      =1,
 		set_shadow_color  =1,
 		set_shadow_blur   =1,
 		set_shadow_passes =1,
+		set_shadow_inset  =1,
+
+		get_content_shadow_x      =1,
+		get_content_shadow_y      =1,
+		get_content_shadow_color  =1,
+		get_content_shadow_blur   =1,
+		get_content_shadow_passes =1,
+		get_content_shadow_inset  =1,
+
+		set_content_shadow_x      =1,
+		set_content_shadow_y      =1,
+		set_content_shadow_color  =1,
+		set_content_shadow_blur   =1,
+		set_content_shadow_passes =1,
+		set_content_shadow_inset  =1,
 
 		--text
 
@@ -3621,7 +3791,7 @@ function build()
 		get_text_span_feature_count=1,
 		clear_text_span_features=1,
 		get_text_span_feature=1,
-		set_text_span_feature=1,
+		add_text_span_feature=1,
 
 		get_text_span_offset            =1,
 		get_text_span_font_id           =1,
