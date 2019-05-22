@@ -13,14 +13,18 @@ local win = app:window{
 	w = 1200, h = 700,
 }
 
-local s = glue.readfile'media/fonts/OpenSans-Regular.ttf'
+local fonts = {
+	glue.readfile'media/fonts/OpenSans-Regular.ttf';
+	glue.readfile'media/fonts/OpenSans-Bold.ttf';
+}
 
-local function load_font(self, file_data_buf, file_size_buf)
+local function load_font(font_id, file_data_buf, file_size_buf)
+	local s = assert(fonts[font_id+1])
 	file_data_buf[0] = ffi.cast('void*', s)
 	file_size_buf[0] = #s
 end
 
-local function unload_font(self, file_data_buf, file_size_buf)
+local function unload_font(font_id, file_data_buf, file_size_buf)
 	file_data_buf[0] = nil
 	file_size_buf[0] = 0
 end
@@ -29,34 +33,38 @@ local s = glue.readfile('lorem_ipsum.txt')
 
 --assert(ll.memtotal() == 0)
 
-local llib = ll.layerlib()
-local font_id = llib:font(load_font, unload_font)
+local llib = ll.layerlib(load_font, unload_font)
+local font1_id = llib:font()
+local font2_id = llib:font()
 local e = llib:layer(nil)
+local e1, e2 = e:child(0), e:child(1)
 
 e.clip = ll.CLIP_PADDING
 --e.clip = ll.CLIP_NONE
 
---e.padding_left   =  2
---e.padding_top    =  2
---e.padding_right  =  2
---e.padding_bottom =  2
+e.padding_left   = 50
+e.padding_top    = 50
+e.padding_right  = 50
+e.padding_bottom = 50
 
---e.border_left   =  2
---e.border_top    =  2
---e.border_right  =  2
---e.border_bottom =  2
+--e.border_width_left   =  2
+--e.border_width_top    =  2
+--e.border_width_right  =  2
+--e.border_width_bottom =  2
 e.border_color_left   = 0xff00ffff
 e.border_color_top    = 0xffff00ff
 e.border_color_right  = 0x008800ff
 e.border_color_bottom = 0x888888ff
---e.corner_radius_top_left = 20
+e.corner_radius_bottom_left = 20
+e.corner_radius_bottom_right = 10
+e.corner_radius_kappa = 1.2
 
 e.padding = 20
-e.border = 10
+e.border_width = 10
 e.border_color = 0xff0000ff
 
 e.bg_type = ll.BG_COLOR
-e.bg_color = 0x0099ffff --0x336699ff
+e.bg_color = 0x00336699 --0x336699ff
 
 --e.bg_type = ll.BG_LINEAR_GRADIENT
 e.bg_y2 = 100
@@ -66,19 +74,33 @@ e:set_bg_color_stop_color(0, 0xff0000ff)
 e:set_bg_color_stop_color(1, 0x0000ffff)
 e.bg_cx1 = 1
 
-e.shadow_y = 10
-e.shadow_x = 10
-e.shadow_blur = 10
-e.shadow_passes = 3
-e.shadow_color = 0x000000ff
+e:set_shadow_x       (0, 6)
+e:set_shadow_y       (0, 6)
+e:set_shadow_blur    (0, 4)
+e:set_shadow_color   (0, 0x000000ff)
+e:set_shadow_content (0, false)
+e:set_shadow_inset   (0, false)
+
+e:set_shadow_x       (1, 4)
+e:set_shadow_y       (1, 4)
+e:set_shadow_blur    (1, 0)
+e:set_shadow_color   (1, 0xffffffff)
+e:set_shadow_content (1, false)
+e:set_shadow_inset   (1, false)
 
 e.layout_type = ll.LAYOUT_FLEX
 --e.flex_flow = ll.FLEX_FLOW_Y
 
-local e1, e2 = e:child(0), e:child(1)
+e1.clip = ll.CLIP_BG
+e2.clip = ll.CLIP_PADDING
 
-e1.border = 10; e1.padding = 20
-e2.border = 10; e2.padding = 20
+e1.bg_type = ll.BG_COLOR
+e1.bg_color = 0x33333366
+e2.bg_type = ll.BG_COLOR
+e2.bg_color = 0x33333366
+
+e1.border_width = 10; e1.padding = 20
+e2.border_width = 10; e2.padding = 20
 e1.border_color = 0xffff00ff
 e2.border_color = 0x00ff00ff
 e1.min_cw = 10; e1.min_ch = 10
@@ -89,24 +111,44 @@ e2.min_cw = 10; e2.min_ch = 10
 --llib.glyph_run_cache_size = 0
 
 e1:set_text_utf8(s, -1)
-e1:set_text_span_script   (0, 'Zyyy')
-e1:set_text_span_lang     (0, 'en')
-e1:set_text_span_font_id  (0, font_id)
+e1:set_text_span_font_id  (0, font1_id)
 e1:set_text_span_font_size(0, 14)
 e1:set_text_span_color    (0, 0xffffffff)
 e1.text_align_y = ll.ALIGN_TOP
-e1.text_align_x = ll.ALIGN_CENTER
+e1.text_align_x = ll.ALIGN_RIGHT
+
+e1:set_shadow_x       (2, 1)
+e1:set_shadow_y       (2, 1)
+e1:set_shadow_blur    (2, 1)
+e1:set_shadow_color   (2, 0x000000ff)
+e1:set_shadow_content (2, true)
+e1:set_shadow_inset   (2, false)
 
 --e1.visible = false
 --e2.visible = false
 
---e.shadow_inset = true
+do local e = e2
+e:set_text_utf8('Yea but it\'s live!!', -1)
+e:set_text_span_font_id  (0, font2_id)
+e:set_text_span_font_size(0, 100)
+e:set_text_span_color    (0, 0x333333ff)
+e.text_align_y = ll.ALIGN_CENTER
+e.text_align_x = ll.ALIGN_CENTER
 
-e.content_shadow_y = 1
-e.content_shadow_x = 1
-e.content_shadow_blur = 1
-e.content_shadow_passes = 3
-e.content_shadow_color = 0x000000ff
+e:set_shadow_x       (0, 0)
+e:set_shadow_y       (0, 1)
+e:set_shadow_blur    (0, 2)
+e:set_shadow_color   (0, 0x000000ff)
+e:set_shadow_content (0, true)
+e:set_shadow_inset   (0, true)
+
+e:set_shadow_x       (1, 0)
+e:set_shadow_y       (1, 1)
+e:set_shadow_blur    (1, 1)
+e:set_shadow_color   (1, 0x888888ff)
+e:set_shadow_content (1, true)
+e:set_shadow_inset   (1, false)
+end
 
 function win:repaint()
 
@@ -119,6 +161,7 @@ function win:repaint()
 	local w, h = self:client_size()
 	cr:translate(50, 50)
 	e:sync(w - 100, h - 100)
+	print'synced'
 	e:draw(cr)
 
 	--e1:set_text_utf8('', -1)

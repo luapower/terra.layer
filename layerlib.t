@@ -133,6 +133,8 @@ struct Border (gettersandsetters) {
 	dash: arr(double);
 	dash_offset: int;
 
+	-- border stroke positioning relative to box edge.
+	-- -1..1 goes from inside to outside of box edge.
 	offset: num;
 
 	line_to: BorderLineToFunc;
@@ -219,6 +221,7 @@ end
 struct Background (gettersandsetters) {
 	_type: enum; --BG_*
 	hittable: bool;
+	operator: enum; --OPERATOR_*
 	-- overlapping between bg clipping edge and border stroke.
 	-- -1..1 goes from inside to outside of border edge.
 	clip_border_offset: num;
@@ -359,46 +362,59 @@ terra Background:set_scale_cy    (v: num) [set(self, 'scale_cy', v)] end
 
 --shadow ---------------------------------------------------------------------
 
-struct ShadowState {
-	blur: Blur;
-	blurred_surface: &surface;
-	x: num; y: num;
-}
-
 struct Shadow (gettersandsetters) {
-	x: num;
-	y: num;
+	--config
+	layer: &Layer;
+	offset_x: num; --relative to the shape that it is shadowing
+	offset_y: num;
 	color: color;
-	blur: uint8;
-	passes: uint8;
+	blur_radius: uint8;
+	blur_passes: uint8;
 	inset: bool;
-	_state: ShadowState;
+	content: bool;  --shadow the layer content vs its box
+	--state
+	blur: Blur;
+	surface: &surface;
+	surface_x: num; --relative to the origin of the shadow shape
+	surface_y: num;
 }
 
-terra Shadow:init(layer: &Layer, repaint_shadow: {&Layer, &Bitmap} -> {})
-	self._state.blur:init(BITMAP_G8, [BlurRepaintFunc](repaint_shadow), layer)
+terra Shadow:init(layer: &Layer)
+	fill(self)
+	self.layer = layer
+	self.color = 0x000000ff
+	self.blur_passes = 3
+	self.blur:init(BITMAP_G8)
 end
 
 terra Shadow:invalidate()
-	if self._state.blurred_surface ~= nil then
-		self._state.blurred_surface:free()
-		self._state.blurred_surface = nil
-	end
+	self.blur:invalidate()
 end
 
 terra Shadow:free()
-	self:invalidate()
-	self._state.blur:free()
+	self.blur:free()
+	if self.surface ~= nil then
+		self.surface:free()
+		self.surface = nil
+	end
 end
 
 terra Shadow:visible()
-	return self.blur > 0
-		or self.x ~= 0
-		or self.y ~= 0
+	return self.blur_radius > 0
+		or self.offset_x ~= 0
+		or self.offset_y ~= 0
+end
+
+terra Shadow:get_edge_size()
+	return self.blur_passes * self.blur_radius
 end
 
 terra Shadow:get_spread()
-	return self.passes * self.blur
+	if self.inset then
+		return max(abs(self.offset_x), abs(self.offset_y))
+	else
+		return self.edge_size
+	end
 end
 
 --text -----------------------------------------------------------------------
@@ -424,7 +440,7 @@ terra Text:init(r: &tr.Renderer)
 	self.shaped = true
 	self.wrapped = true
 	self.caret_width = 1
-	self.caret_color = color {0xffffffff}
+	self.caret_color.uint = 0x000000ff
 	self.selectable = true
 end
 
@@ -510,6 +526,7 @@ struct Lib (gettersandsetters) {
 	text_renderer: tr.Renderer;
 	grid_occupied: BoolBitmap;
 	default_text_span: tr.Span;
+	default_shadow: Shadow;
 	default_layout_solver: &LayoutSolver;
 }
 
@@ -517,7 +534,7 @@ struct Lib (gettersandsetters) {
 
 CLIP_NONE    = 0
 CLIP_PADDING = 1
-CLIP_BG      = 1
+CLIP_BG      = 2
 
 struct Layer (gettersandsetters) {
 
@@ -533,8 +550,8 @@ struct Layer (gettersandsetters) {
 	visible  : bool;
 	operator : enum;
 	clip     : enum; --CLIP_*
-	snap_x   : bool;
-	snap_y   : bool;
+	snap_x   : bool; --snap to pixels on x-axis
+	snap_y   : bool; --snap to pixels on y-axis
 
 	opacity: num;
 
@@ -546,8 +563,7 @@ struct Layer (gettersandsetters) {
 	transform  : Transform;
 	border     : Border;
 	bg         : Background;
-	shadow     : Shadow;
-	content_shadow: Shadow;
+	shadows    : arr(Shadow);
 	text       : Text;
 
 	--layouting -------------------
@@ -567,8 +583,8 @@ struct Layer (gettersandsetters) {
 	--child of flex layouts
 	_min_w: num;
 	_min_h: num;
-	min_cw: num;
-	min_ch: num;
+	min_cw: num; --min client width
+	min_ch: num; --min client height
 	align_x: enum; --ALIGN_*
 	align_y: enum; --ALIGN_*
 
@@ -599,9 +615,6 @@ terra Layer:get_owner_array()
 	return iif(self.parent ~= nil, &self.parent.children, &self.lib.top_layers)
 end
 
-terra Layer.methods.repaint_shadow :: {&Layer, &Bitmap} -> {}
-terra Layer.methods.repaint_content_shadow :: {&Layer, &Bitmap} -> {}
-
 terra Layer:init(lib: &Lib, parent: &Layer)
 	fill(self)
 	self.lib = lib
@@ -616,8 +629,6 @@ terra Layer:init(lib: &Lib, parent: &Layer)
 	self.transform:init()
 	self.border:init()
 	self.bg:init()
-	self.shadow:init(self, [Layer.methods.repaint_shadow])
-	self.content_shadow:init(self, [Layer.methods.repaint_content_shadow])
 	self.text:init(&lib.text_renderer)
 
 	self.align_items_x = ALIGN_STRETCH
@@ -633,11 +644,10 @@ terra Layer:free()
 	self.children:free()
 	self.border:free()
 	self.bg:free()
-	self.shadow:free()
-	self.content_shadow:free()
+	self.shadows:free()
 	self.text:free()
 	self:free_layout()
-	realloc(self, 0)
+	realloc(self, 0) --TODO: this belongs in free_and_dealloc
 end
 
 terra Lib:layer(parent: &Layer)
@@ -675,12 +685,19 @@ end
 
 terra Layer:move(parent: &Layer, i: int)
 	if parent == self.parent then
-		i = clamp(i, 0, parent.children.len-1)
-		parent.children:move(self.index, i)
+		if parent ~= nil then
+			i = clamp(i, 0, parent.children.len-1)
+			parent.children:move(self.index, i)
+		end
 	else
-		i = clamp(i, 0, parent.children.len)
-		self.parent.children:remove(self.index)
-		parent.children:insert(i, self)
+		if self.parent ~= nil then
+			self.parent.children:remove(self.index)
+		end
+		if parent ~= nil then
+			i = clamp(i, 0, parent.children.len)
+			parent.children:insert(i, self)
+		end
+		self._parent = parent
 	end
 end
 
@@ -1194,6 +1211,7 @@ terra Background:pattern()
 end
 
 terra Background:paint(cr: &context)
+	cr:operator(self.operator)
 	if self.type == BG_COLOR then
 		cr:rgba(self.color)
 		cr:paint()
@@ -1212,143 +1230,149 @@ terra Background:paint(cr: &context)
 end
 
 terra Layer:paint_bg(cr: &context)
-	cr:operator(self.operator)
 	self.bg:paint(cr)
 end
 
 --shadow drawing -------------------------------------------------------------
 
+terra Shadow:bitmap_rect()
+	if self.content then
+		var x, y, w, h = self.layer:content_bbox(true)
+		return rect.offset(self.spread, x, y, w, h)
+	else
+		if self.layer:border_visible() then
+			return self.layer:border_rect(iif(self.inset, -1, 1), self.spread)
+		else
+			return self.layer:bg_rect(self.spread)
+		end
+	end
+end
+
 terra Layer:size_changed()
-	self.shadow:invalidate()
+	self.shadows:call'invalidate'
 	self:unwrap()
 end
 
-terra Layer:shadow_spread()
-	if self.shadow.inset then
-		return max(abs(self.shadow.x), abs(self.shadow.y))
+terra Shadow:path(cr: &context)
+	if self.layer:border_visible() then
+		self.layer:border_path(cr, iif(self.inset, -1, 1), 0)
 	else
-		return self.shadow.spread
+		self.layer:bg_path(cr, 0)
 	end
 end
 
-terra Layer:shadow_bitmap_rect()
-	var size = self:shadow_spread()
-	if self:border_visible() then
-		return self:border_rect(iif(self.shadow.inset, -1, 1), size)
+terra Shadow:clip_path(cr: &context)
+	if self.content then
+		return false --TODO
 	else
-		return self:bg_rect(size)
+		self:path(cr)
+		if not self.inset then
+			cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
+			var m = cr:matrix()
+			cr:identity_matrix()
+			cr:rectangle(0, 0, cr:target():width(), cr:target():height())
+			cr:matrix(&m)
+			return true
+		end
 	end
 end
 
---[[
-terra Layer:shadow_round_rect()
-	var size = self:shadow_spread()
-	if self:border_visible() then
-		return self:border_round_rect(iif(self.shadow.inset, -1, 1), size)
-	else
-		return self:bg_round_rect(size)
-	end
-end
-]]
-
-terra Layer:shadow_path(cr: &context)
-	if self:border_visible() then
-		self:border_path(cr, iif(self.shadow.inset, -1, 1), 0)
-	else
-		self:bg_path(cr, 0)
-	end
-end
-
-terra Layer:shadow_clip_path(cr: &context)
-	self:shadow_path(cr)
-	if not self.shadow.inset then
-		cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
-		var m = cr:matrix()
-		cr:identity_matrix()
-		cr:rectangle(0, 0, cr:target():width(), cr:target():height())
-		cr:matrix(&m)
-	end
-end
-
-terra Layer:draw_shadow_shape(cr: &context)
-	var s = &self.shadow
-	cr:operator(CAIRO_OPERATOR_SOURCE)
-	cr:rgba(0, 0, 0, 0)
-	cr:paint()
-	cr:translate(-s._state.x, -s._state.y)
+terra Shadow:draw_shape(cr: &context)
 	cr:new_path()
-	self:shadow_path(cr)
-	if s.inset then
+	self:path(cr)
+	if self.inset then
 		cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
 		cr:identity_matrix()
 		cr:rectangle(0, 0, cr:target():width(), cr:target():height())
 	end
-	cr:operator(self.operator)
+	cr:operator(CAIRO_OPERATOR_SOURCE)
 	cr:rgba(0, 0, 0, 1)
 	cr:fill()
 end
 
-terra Layer:repaint_shadow(bmp: &Bitmap)
-	var sr = bmp:surface(); defer sr:free()
-	var cr = sr:context(); defer cr:free()
-	self:draw_shadow_shape(cr)
-end
+terra Shadow:draw(cr: &context)
+	if not self.blur.valid then
+		if not self:visible() then return end
+		var bx, by, bw, bh = self:bitmap_rect()
+		if not (bw > 0 and bh > 0) then return end
+		self.surface_x = bx
+		self.surface_y = by
+		var src_bmp = self.blur:invalidate(bw, bh, self.blur_radius, self.blur_passes)
+		if src_bmp ~= nil then
+			var mask_bmp: Bitmap
+			var mask_sr: &surface = nil
+			var sr = src_bmp:surface()
+			var cr = sr:context()
+			cr:translate(-self.surface_x, -self.surface_y)
+			cr:operator(CAIRO_OPERATOR_SOURCE)
+			cr:rgba(0, 0, 0, 0)
+			cr:paint()
+			if self.content then
+				self.layer:draw_content(cr)
+				if self.inset then
+					sr:flush()
+					mask_bmp = src_bmp:copy()
+					mask_sr = mask_bmp:surface()
+					cr:rgba(1, 1, 1, 1)
+					cr:operator(CAIRO_OPERATOR_XOR)
+					cr:paint()
+				end
+			else
+				self:draw_shape(cr)
+			end
+			cr:free()
+			sr:free()
 
-terra Layer:draw_shadow(cr: &context)
-	var s = &self.shadow
-	if not s:visible() then return end
-	var bx, by, bw, bh = self:shadow_bitmap_rect()
-	if not (bw > 0 and bh > 0) then return end
-	s._state.x = bx
-	s._state.y = by
-	if s._state.blurred_surface == nil then
-		var bmp = s._state.blur:blur(
-			bw, bh, s.blur, s.passes)
-		s._state.blurred_surface = bmp:surface()
+			var dst_bmp = self.blur:blur()
+			if self.surface ~= nil then
+				self.surface:free()
+			end
+			self.surface = dst_bmp:surface()
+
+			if mask_sr ~= nil then
+				var cr = self.surface:context()
+				cr:translate(-self.offset_x, -self.offset_y)
+				cr:operator(CAIRO_OPERATOR_DEST_IN)
+				cr:source(mask_sr, 0, 0)
+				cr:paint()
+				cr:free()
+				mask_sr:free()
+				mask_bmp:free()
+			end
+		end
 	end
-	var sx = bx + s.x
-	var sy = by + s.y
-	cr:new_path()
+
+	var sx = self.surface_x + self.offset_x
+	var sy = self.surface_y + self.offset_y
 	cr:save()
-	self:shadow_clip_path(cr)
-	cr:clip()
-	cr:rgba(s.color)
-	cr:mask(s._state.blurred_surface, sx, sy)
+	cr:new_path()
+	if self:clip_path(cr) then
+		cr:clip()
+	end
+	cr:rgba(self.color)
+	cr:operator(self.layer.operator)
+	cr:mask(self.surface, sx, sy)
 	cr:restore()
 end
 
---content shadow drawing -----------------------------------------------------
-
-terra Layer.methods.content_bbox :: {&Layer, bool} -> {num, num, num, num}
-
-terra Layer:repaint_content_shadow(bmp: &Bitmap)
-	var sr = bmp:surface(); defer sr:free()
-	var cr = sr:context(); defer cr:free()
-	var s = &self.content_shadow
-	cr:translate(-s._state.x, -s._state.y)
-	self:draw_content(cr)
-end
-
-terra Layer:content_shadow_bitmap_rect()
-	var x, y, w, h = self:content_bbox(true)
-	return rect.offset(self.content_shadow.spread, x, y, w, h)
-end
-
-terra Layer:draw_content_shadow(cr: &context)
-	var s = &self.content_shadow
-	if not s:visible() then return end
-	var bx, by, bw, bh = self:content_shadow_bitmap_rect()
-	if not (bw > 0 and bh > 0) then return end
-	s._state.x = bx
-	s._state.y = by
-	if s._state.blurred_surface == nil then
-		var bmp = s._state.blur:blur(bw, bh, s.blur, s.passes)
-		s._state.blurred_surface = bmp:surface()
+terra Layer:draw_shadows(cr: &context, inset: bool, content: bool)
+	for _,s in self.shadows do
+		if s.content == content and s.inset == inset then
+			s:draw(cr)
+		end
 	end
-	var sx = bx + s.x
-	var sy = by + s.y
-	cr:rgba(s.color)
-	cr:mask(s._state.blurred_surface, sx, sy)
+end
+terra Layer:draw_inset_content_shadows(cr: &context)
+	self:draw_shadows(cr, true, true)
+end
+terra Layer:draw_outset_content_shadows(cr: &context)
+	self:draw_shadows(cr, false, true)
+end
+terra Layer:draw_inset_box_shadows(cr: &context)
+	self:draw_shadows(cr, true, false)
+end
+terra Layer:draw_outset_box_shadows(cr: &context)
+	self:draw_shadows(cr, false, false)
 end
 
 --text drawing ---------------------------------------------------------------
@@ -1379,12 +1403,15 @@ end
 
 terra Layer:sync_text_wrap()
 	if self.text.wrapped then return end
+	print'wrapping'
 	self.text.layout:wrap(self.cw)
 	self.text.wrapped = true
 end
 
 terra Layer:sync_text_align()
+	print'aligning'
 	self.text.layout:align(0, 0, self.cw, self.ch, self.text.align_x, self.text.align_y)
+	print'aligned'
 	if self.text.selectable then
 		self.text.selection:init(&self.text.layout)
 	end
@@ -1397,8 +1424,7 @@ end
 
 terra Layer:draw_text(cr: &context)
 	if not self:text_visible() then return end
-	var x1: double, y1: double, x2: double, y2: double
-	cr:clip_extents(&x1, &y1, &x2, &y2)
+	var x1, y1, x2, y2 = cr:clip_extents()
 	self.text.layout:clip(x1, y1, x2-x1, y2-y1)
 	self.text.layout:paint(cr)
 end
@@ -1471,22 +1497,18 @@ terra Layer:draw_caret(cr: &context) end
 
 --layer bbox -----------------------------------------------------------------
 
-terra Layer:children_bbox(strict: bool)
+terra Layer:content_bbox(strict: bool) --in self content space
 	var bb = rect{0, 0, 0, 0}
 	for layer in self do
 		bb:bbox(rect(layer:bbox(strict)))
 	end
-	return bb()
-end
-
-terra Layer:content_bbox(strict: bool)
-	var bb = rect{0, 0, 0, 0}
-	bb:bbox(rect(self:children_bbox(strict)))
 	bb:bbox(rect(self:text_bbox()))
 	return bb()
 end
 
-terra Layer:bbox(strict: bool)
+terra Layer.methods.bbox :: {&Layer, bool} -> {num, num, num, num}
+
+terra Layer:bbox(strict: bool) --in parent's content space
 	var bb = rect{0, 0, 0, 0}
 	if self.visible then
 		if strict or self.clip == CLIP_NONE then
@@ -1511,6 +1533,8 @@ terra Layer:bbox(strict: bool)
 			bb:bbox(rect(self:border_rect(1, 0)))
 		end
 	end
+	inc(bb.x, self.x)
+	inc(bb.y, self.y)
 	return bb()
 end
 
@@ -1518,7 +1542,7 @@ end
 
 terra Layer.methods.draw :: {&Layer, &context} -> {}
 
-terra Layer:draw_children(cr: &context) --called in content space
+terra Layer:draw_children(cr: &context) --called in own content space
 	for e in self do
 		e:draw(cr)
 	end
@@ -1557,7 +1581,7 @@ end
 local ft_lib = global(FT_Library, nil)
 local face = global(FT_Face, nil)
 
-terra Layer:draw(cr: &context) --called in parent's content space; child intf.
+terra Layer:draw(cr: &context) --called in parent's content space
 
 	if not self.visible or self.opacity <= 0 then
 		return
@@ -1570,53 +1594,55 @@ terra Layer:draw(cr: &context) --called in parent's content space; child intf.
 		cr:save()
 	end
 
-	var m = self:cr_abs_matrix(cr)
-	cr:matrix(&m)
+	var bm = self:cr_abs_matrix(cr)
+	cr:matrix(&bm)
 
 	var bg = self:bg_visible()
 
-	if not self.shadow.inset then
-		self:draw_shadow(cr)
-	end
+	self:draw_outset_box_shadows(cr)
 
-	var clip = bg or self.clip ~= CLIP_NONE
-	if clip then
+	if self:bg_visible() then
 		cr:save()
 		cr:new_path()
-		self:bg_path(cr, 0) --CLIP_BG is implicit here
+		self:bg_path(cr, 0)
 		cr:clip()
-		if bg then
-			self:paint_bg(cr)
-		end
-		if self.shadow.inset then
-			self:draw_shadow(cr)
-		end
-		if self.clip == CLIP_PADDING then
-			cr:new_path()
-			cr:rectangle(self.cx, self.cy, self.cw, self.ch)
-			cr:clip()
-		elseif self.clip == CLIP_NONE then
-			--clip was only needed to draw the bg
-			cr:restore()
-			clip = false
-		end
-	end
-
-	if self.clip == CLIP_NONE then
-		self:draw_border(cr)
-	end
-
-	cr:translate(self.cx, self.cy)
-	self:draw_content_shadow(cr)
-	self:draw_content(cr)
-	cr:translate(-self.cx, -self.cy)
-	if clip then
+		self:paint_bg(cr)
 		cr:restore()
 	end
 
 	if self.clip ~= CLIP_NONE then
+		cr:save()
+		cr:new_path()
+		self:bg_path(cr, 0)
+		cr:clip()
+		if self.clip == CLIP_PADDING then
+			cr:new_path()
+			cr:rectangle(self.px, self.py, self.cw, self.ch)
+			cr:clip()
+		end
+	end
+
+	var cm = bm:copy()
+	cm:translate(self.px, self.py)
+
+	cr:matrix(&cm)
+	self:draw_outset_content_shadows(cr)
+
+	if self.clip == CLIP_NONE then
+		cr:matrix(&bm)
 		self:draw_border(cr)
 	end
+
+	cr:matrix(&cm)
+	self:draw_content(cr)
+	self:draw_inset_content_shadows(cr)
+
+	if self.clip ~= CLIP_NONE then
+		cr:restore()
+		self:draw_border(cr)
+	end
+
+	self:draw_inset_box_shadows(cr)
 
 	if compose then
 		cr:pop_group_to_source()
@@ -3022,12 +3048,13 @@ end
 
 --lib ------------------------------------------------------------------------
 
-terra Lib:init()
+terra Lib:init(load_font: tr.FontLoadFunc, unload_font: tr.FontLoadFunc)
 	self.top_layers:init()
-	self.text_renderer:init()
+	self.text_renderer:init(load_font, unload_font)
 	self.grid_occupied:init()
 	self.default_layout_solver = &null_layout
-	self.default_text_span = [tr.Span.empty]
+	self.default_text_span:init()
+	self.default_shadow:init(nil)
 end
 
 terra Lib:free()
@@ -3052,14 +3079,14 @@ terra Lib:set_glyph_run_cache_size       (v: int) self.text_renderer.glyph_runs.
 
 --font registration
 
-terra Lib:font(load: tr.FontLoadFunc, unload: tr.FontUnloadFunc)
-	return self.text_renderer:font(load, unload)
+terra Lib:font()
+	return self.text_renderer:font()
 end
 
 --self-alloc API for ffi
 
-local terra new_lib()
-	return new(Lib)
+local terra new_lib(load_font: tr.FontLoadFunc, unload_font: tr.FontLoadFunc)
+	return new(Lib, load_font, unload_font)
 end
 
 terra Lib:free_and_dealloc()
@@ -3093,24 +3120,42 @@ terra Layer:set_snap_x   (v: bool) self.snap_x = v end
 terra Layer:set_snap_y   (v: bool) self.snap_y = v end
 terra Layer:set_opacity  (v: num)  self.opacity = v end
 
+do end --transforms
+
+terra Layer:get_rotation    () return self.transform.rotation    end
+terra Layer:get_rotation_cx () return self.transform.rotation_cx end
+terra Layer:get_rotation_cy () return self.transform.rotation_cy end
+terra Layer:get_scale       () return self.transform.scale       end
+terra Layer:get_scale_cx    () return self.transform.scale_cx    end
+terra Layer:get_scale_cy    () return self.transform.scale_cy    end
+
+terra Layer:set_rotation    (v: num) self.transform.rotation    = v end
+terra Layer:set_rotation_cx (v: num) self.transform.rotation_cx = v end
+terra Layer:set_rotation_cy (v: num) self.transform.rotation_cy = v end
+terra Layer:set_scale       (v: num) self.transform.scale       = v end
+terra Layer:set_scale_cx    (v: num) self.transform.scale_cx    = v end
+terra Layer:set_scale_cy    (v: num) self.transform.scale_cy    = v end
+
 do end --borders
 
-terra Layer:get_border_left   () return self.border.left   end
-terra Layer:get_border_right  () return self.border.right  end
-terra Layer:get_border_top    () return self.border.top    end
-terra Layer:get_border_bottom () return self.border.bottom end
+terra Layer:get_border_width_left   () return self.border.left   end
+terra Layer:get_border_width_right  () return self.border.right  end
+terra Layer:get_border_width_top    () return self.border.top    end
+terra Layer:get_border_width_bottom () return self.border.bottom end
 
-terra Layer:set_border_left   (v: num) self.border.left    = v; self.shadow:invalidate() end
-terra Layer:set_border_right  (v: num) self.border.right   = v; self.shadow:invalidate() end
-terra Layer:set_border_top    (v: num) self.border.top     = v; self.shadow:invalidate() end
-terra Layer:set_border_bottom (v: num) self.border.bottom  = v; self.shadow:invalidate() end
+terra Layer:border_shape_changed() end --TODO
 
-terra Layer:set_border(v: num)
+terra Layer:set_border_width_left   (v: num) self.border.left    = v; self:border_shape_changed() end
+terra Layer:set_border_width_right  (v: num) self.border.right   = v; self:border_shape_changed() end
+terra Layer:set_border_width_top    (v: num) self.border.top     = v; self:border_shape_changed() end
+terra Layer:set_border_width_bottom (v: num) self.border.bottom  = v; self:border_shape_changed() end
+
+terra Layer:set_border_width(v: num)
 	self.border.left   = v
 	self.border.right  = v
 	self.border.top    = v
 	self.border.bottom = v
-	self.shadow:invalidate()
+	self:border_shape_changed()
 end
 
 terra Layer:get_corner_radius_top_left     () return self.border.corner_radius_top_left     end
@@ -3119,18 +3164,18 @@ terra Layer:get_corner_radius_bottom_left  () return self.border.corner_radius_b
 terra Layer:get_corner_radius_bottom_right () return self.border.corner_radius_bottom_right end
 terra Layer:get_corner_radius_kappa        () return self.border.corner_radius_kappa        end
 
-terra Layer:set_corner_radius_top_left     (v: num) self.border.corner_radius_top_left     = v; self.shadow:invalidate() end
-terra Layer:set_corner_radius_top_right    (v: num) self.border.corner_radius_top_right    = v; self.shadow:invalidate() end
-terra Layer:set_corner_radius_bottom_left  (v: num) self.border.corner_radius_bottom_left  = v; self.shadow:invalidate() end
-terra Layer:set_corner_radius_bottom_right (v: num) self.border.corner_radius_bottom_right = v; self.shadow:invalidate() end
-terra Layer:set_corner_radius_kappa        (v: num) self.border.corner_radius_kappa        = v; self.shadow:invalidate() end
+terra Layer:set_corner_radius_top_left     (v: num) self.border.corner_radius_top_left     = v; self:border_shape_changed() end
+terra Layer:set_corner_radius_top_right    (v: num) self.border.corner_radius_top_right    = v; self:border_shape_changed() end
+terra Layer:set_corner_radius_bottom_left  (v: num) self.border.corner_radius_bottom_left  = v; self:border_shape_changed() end
+terra Layer:set_corner_radius_bottom_right (v: num) self.border.corner_radius_bottom_right = v; self:border_shape_changed() end
+terra Layer:set_corner_radius_kappa        (v: num) self.border.corner_radius_kappa        = v; self:border_shape_changed() end
 
 terra Layer:set_corner_radius(v: num)
 	self.border.corner_radius_top_left     = v
 	self.border.corner_radius_top_right    = v
 	self.border.corner_radius_bottom_left  = v
 	self.border.corner_radius_bottom_right = v
-	self.shadow:invalidate()
+	self:border_shape_changed()
 end
 
 terra Layer:get_border_color_left   () return self.border.color_left   .uint end
@@ -3148,7 +3193,6 @@ terra Layer:set_border_color(v: uint32)
 	self.border.color_right  .uint = v
 	self.border.color_top    .uint = v
 	self.border.color_bottom .uint = v
-	self.shadow:invalidate()
 end
 
 terra Layer:get_border_dash_count() return self.border.dash.len end
@@ -3161,22 +3205,25 @@ terra Layer:get_border_dash_offset() return self.border.dash_offset end
 terra Layer:set_border_dash_offset(v: int) self.border.dash_offset = v end
 
 terra Layer:get_border_offset() return self.border.offset end
-terra Layer:set_border_offset(v: int) self.border.offset = v; self.shadow:invalidate() end
+terra Layer:set_border_offset(v: int) self.border.offset = v; self:border_shape_changed() end
 
 terra Layer:set_border_line_to(line_to: BorderLineToFunc)
-	self.border.line_to = line_to; self.shadow:invalidate()
+	self.border.line_to = line_to; self:border_shape_changed()
 end
 
-do end --bgs
+do end --backgrounds
 
 terra Layer:get_bg_type() return self.bg.type end
 terra Layer:set_bg_type(v: enum) self.bg.type = v end
 
-terra Layer:get_bg_hittable    () return self.bg.hittable end
-terra Layer:get_bg_clip_border_offset() return self.bg.clip_border_offset end
+terra Layer:get_bg_hittable() return self.bg.hittable end
+terra Layer:set_bg_hittable(v: bool) self.bg.hittable = v end
 
-terra Layer:set_bg_hittable    (v: bool) self.bg.hittable = v end
-terra Layer:set_bg_clip_border_offset(v: num) self.bg.clip_border_offset = v; self.shadow:invalidate() end
+terra Layer:get_bg_operator() return self.bg.operator end
+terra Layer:set_bg_operator(v: enum) self.bg.operator = v end
+
+terra Layer:get_bg_clip_border_offset() return self.bg.clip_border_offset end
+terra Layer:set_bg_clip_border_offset(v: num) self.bg.clip_border_offset = v end
 
 terra Layer:get_bg_color() return self.bg.color end
 terra Layer:set_bg_color(v: uint) self.bg.color = color{uint = v} end
@@ -3261,33 +3308,43 @@ terra Layer:set_bg_scale_cy    (v: num) self.bg.scale_cy = v end
 
 do end --shadows
 
-terra Layer:get_shadow_x      () return self.shadow.x end
-terra Layer:get_shadow_y      () return self.shadow.y end
-terra Layer:get_shadow_color  () return self.shadow.color end
-terra Layer:get_shadow_blur   () return self.shadow.blur end
-terra Layer:get_shadow_passes () return self.shadow.passes end
-terra Layer:get_shadow_inset  () return self.shadow.inset end
+terra Layer:shadow(i: int)
+	return self.shadows:at(i, &self.lib.default_shadow)
+end
 
-terra Layer:set_shadow_x      (v: num)    self.shadow.x          = v end
-terra Layer:set_shadow_y      (v: num)    self.shadow.y          = v end
-terra Layer:set_shadow_color  (v: uint32) self.shadow.color.uint = v end
-terra Layer:set_shadow_blur   (v: uint8)  self.shadow.blur       = v; self.shadow:invalidate() end
-terra Layer:set_shadow_passes (v: uint8)  self.shadow.passes     = v; self.shadow:invalidate() end
-terra Layer:set_shadow_inset  (v: bool)   self.shadow.inset      = v; self.shadow:invalidate() end
+terra Layer:new_shadow(i: int)
+	var s, new_shadows = self.shadows:getat(i)
+	for _,s in new_shadows do
+		s:init(self)
+	end
+	return s
+end
 
-terra Layer:get_content_shadow_x      () return self.content_shadow.x end
-terra Layer:get_content_shadow_y      () return self.content_shadow.y end
-terra Layer:get_content_shadow_color  () return self.content_shadow.color end
-terra Layer:get_content_shadow_blur   () return self.content_shadow.blur end
-terra Layer:get_content_shadow_passes () return self.content_shadow.passes end
-terra Layer:get_content_shadow_inset  () return self.content_shadow.inset end
+terra Layer:get_shadow_count() return self.shadows.len end
+terra Layer:set_shadow_count(n: int)
+	var new_shadows = self.shadows:setlen(n)
+	for _,s in new_shadows do
+		s:init(self)
+	end
+end
 
-terra Layer:set_content_shadow_x      (v: num)    self.content_shadow.x          = v end
-terra Layer:set_content_shadow_y      (v: num)    self.content_shadow.y          = v end
-terra Layer:set_content_shadow_color  (v: uint32) self.content_shadow.color.uint = v end
-terra Layer:set_content_shadow_blur   (v: uint8)  self.content_shadow.blur       = v; self.content_shadow:invalidate() end
-terra Layer:set_content_shadow_passes (v: uint8)  self.content_shadow.passes     = v; self.content_shadow:invalidate() end
-terra Layer:set_content_shadow_inset  (v: bool)   self.content_shadow.inset      = v; self.content_shadow:invalidate() end
+terra Layer:get_shadow_x       (i: int) return self:shadow(i).offset_x end
+terra Layer:get_shadow_y       (i: int) return self:shadow(i).offset_y end
+terra Layer:get_shadow_color   (i: int) return self:shadow(i).color end
+terra Layer:get_shadow_blur    (i: int) return self:shadow(i).blur_radius end
+terra Layer:get_shadow_passes  (i: int) return self:shadow(i).blur_passes end
+terra Layer:get_shadow_inset   (i: int) return self:shadow(i).inset end
+terra Layer:get_shadow_content (i: int) return self:shadow(i).content end
+
+terra Layer:shadow_shape_changed() end --TODO
+
+terra Layer:set_shadow_x       (i: int, v: num)    self:new_shadow(i).offset_x    = v end
+terra Layer:set_shadow_y       (i: int, v: num)    self:new_shadow(i).offset_y    = v end
+terra Layer:set_shadow_color   (i: int, v: uint32) self:new_shadow(i).color.uint  = v end
+terra Layer:set_shadow_blur    (i: int, v: uint8)  self:new_shadow(i).blur_radius = v; self:shadow_shape_changed() end
+terra Layer:set_shadow_passes  (i: int, v: uint8)  self:new_shadow(i).blur_passes = v; self:shadow_shape_changed() end
+terra Layer:set_shadow_inset   (i: int, v: bool)   self:new_shadow(i).inset       = v; self:shadow_shape_changed() end
+terra Layer:set_shadow_content (i: int, v: bool)   self:new_shadow(i).content     = v; self:shadow_shape_changed() end
 
 do end --text
 
@@ -3329,10 +3386,10 @@ terra Layer:span(i: int)
 end
 
 terra Layer:new_span(i: int)
-	var a = &self.text.layout.spans
-	var t = a:at(i, nil)
+	var t = self.text.layout.spans:at(i, nil)
 	if t == nil then
-		t = a:set(i, self.lib.default_text_span, self.lib.default_text_span)
+		var dt = self.lib.default_text_span
+		t = self.text.layout.spans:set(i, dt, dt)
 		self:unshape()
 	end
 	return t
@@ -3609,8 +3666,29 @@ function build()
 		set_padding_bottom=1,
 		set_padding=1,
 
-		to_parent=1, from_parent=1,
-		to_window=1, from_window=1,
+		--transforms
+
+		get_rotation=1,
+		get_rotation_cx=1,
+		get_rotation_cy=1,
+		get_scale=1,
+		get_scale_cx=1,
+		get_scale_cy=1,
+
+		set_rotation=1,
+		set_rotation_cx=1,
+		set_rotation_cy=1,
+		set_scale=1,
+		set_scale_cx=1,
+		set_scale_cy=1,
+
+		--point conversions
+
+		from_box_to_parent=1,
+		from_parent_to_box=1,
+		to_parent=1,  from_parent=1,
+		to_window=1,  from_window=1,
+		to_content=1, from_content=1,
 
 		--drawing
 
@@ -3624,8 +3702,9 @@ function build()
 		set_clip=1,
 
 		get_snap_x=1,
-		set_snap_x=1,
 		get_snap_y=1,
+
+		set_snap_x=1,
 		set_snap_y=1,
 
 		get_opacity=1,
@@ -3633,16 +3712,16 @@ function build()
 
 		--borders
 
-		get_border_left   =1,
-		get_border_right  =1,
-		get_border_top    =1,
-		get_border_bottom =1,
+		get_border_width_left   =1,
+		get_border_width_right  =1,
+		get_border_width_top    =1,
+		get_border_width_bottom =1,
 
-		set_border_left   =1,
-		set_border_right  =1,
-		set_border_top    =1,
-		set_border_bottom =1,
-		set_border=1,
+		set_border_width_left   =1,
+		set_border_width_right  =1,
+		set_border_width_top    =1,
+		set_border_width_bottom =1,
+		set_border_width=1,
 
 		get_corner_radius_top_left     =1,
 		get_corner_radius_top_right    =1,
@@ -3722,6 +3801,7 @@ function build()
 		set_bg_image=1,
 
 		get_bg_hittable    =1,
+		get_bg_operator    =1,
 		get_bg_clip_border_offset=1,
 		get_bg_x           =1,
 		get_bg_y           =1,
@@ -3734,6 +3814,7 @@ function build()
 		get_bg_extend      =1,
 
 		set_bg_hittable    =1,
+		set_bg_operator    =1,
 		set_bg_clip_border_offset=1,
 		set_bg_x           =1,
 		set_bg_y           =1,
@@ -3747,33 +3828,21 @@ function build()
 
 		--shadows
 
-		get_shadow_x      =1,
-		get_shadow_y      =1,
-		get_shadow_color  =1,
-		get_shadow_blur   =1,
-		get_shadow_passes =1,
-		get_shadow_inset  =1,
+		get_shadow_x       =1,
+		get_shadow_y       =1,
+		get_shadow_color   =1,
+		get_shadow_blur    =1,
+		get_shadow_passes  =1,
+		get_shadow_inset   =1,
+		get_shadow_content =1,
 
-		set_shadow_x      =1,
-		set_shadow_y      =1,
-		set_shadow_color  =1,
-		set_shadow_blur   =1,
-		set_shadow_passes =1,
-		set_shadow_inset  =1,
-
-		get_content_shadow_x      =1,
-		get_content_shadow_y      =1,
-		get_content_shadow_color  =1,
-		get_content_shadow_blur   =1,
-		get_content_shadow_passes =1,
-		get_content_shadow_inset  =1,
-
-		set_content_shadow_x      =1,
-		set_content_shadow_y      =1,
-		set_content_shadow_color  =1,
-		set_content_shadow_blur   =1,
-		set_content_shadow_passes =1,
-		set_content_shadow_inset  =1,
+		set_shadow_x       =1,
+		set_shadow_y       =1,
+		set_shadow_color   =1,
+		set_shadow_blur    =1,
+		set_shadow_passes  =1,
+		set_shadow_inset   =1,
+		set_shadow_content =1,
 
 		--text
 
