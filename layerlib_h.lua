@@ -105,7 +105,6 @@ void Layer_set_border_width_left(Layer*, double);
 void Layer_set_border_width_right(Layer*, double);
 void Layer_set_border_width_top(Layer*, double);
 void Layer_set_border_width_bottom(Layer*, double);
-void Layer_set_border_width(Layer*, double);
 double Layer_get_corner_radius_top_left(Layer*);
 double Layer_get_corner_radius_top_right(Layer*);
 double Layer_get_corner_radius_bottom_left(Layer*);
@@ -116,7 +115,6 @@ void Layer_set_corner_radius_top_right(Layer*, double);
 void Layer_set_corner_radius_bottom_left(Layer*, double);
 void Layer_set_corner_radius_bottom_right(Layer*, double);
 void Layer_set_corner_radius_kappa(Layer*, double);
-void Layer_set_corner_radius(Layer*, double);
 uint32_t Layer_get_border_color_left(Layer*);
 uint32_t Layer_get_border_color_right(Layer*);
 uint32_t Layer_get_border_color_top(Layer*);
@@ -125,7 +123,6 @@ void Layer_set_border_color_left(Layer*, uint32_t);
 void Layer_set_border_color_right(Layer*, uint32_t);
 void Layer_set_border_color_top(Layer*, uint32_t);
 void Layer_set_border_color_bottom(Layer*, uint32_t);
-void Layer_set_border_color(Layer*, uint32_t);
 int32_t Layer_get_border_dash_count(Layer*);
 void Layer_set_border_dash_count(Layer*, int32_t);
 double Layer_get_border_dash(Layer*, int32_t);
@@ -147,20 +144,12 @@ double Layer_get_bg_x1(Layer*);
 double Layer_get_bg_y1(Layer*);
 double Layer_get_bg_x2(Layer*);
 double Layer_get_bg_y2(Layer*);
+double Layer_get_bg_r1(Layer*);
+double Layer_get_bg_r2(Layer*);
 void Layer_set_bg_x1(Layer*, double);
 void Layer_set_bg_y1(Layer*, double);
 void Layer_set_bg_x2(Layer*, double);
 void Layer_set_bg_y2(Layer*, double);
-double Layer_get_bg_cx1(Layer*);
-double Layer_get_bg_cy1(Layer*);
-double Layer_get_bg_cx2(Layer*);
-double Layer_get_bg_cy2(Layer*);
-double Layer_get_bg_r1(Layer*);
-double Layer_get_bg_r2(Layer*);
-void Layer_set_bg_cx1(Layer*, double);
-void Layer_set_bg_cy1(Layer*, double);
-void Layer_set_bg_cx2(Layer*, double);
-void Layer_set_bg_cy2(Layer*, double);
 void Layer_set_bg_r1(Layer*, double);
 void Layer_set_bg_r2(Layer*, double);
 int32_t Layer_get_bg_color_stop_count(Layer*);
@@ -388,10 +377,6 @@ local getters = {
 	bg_y1 = C.Layer_get_bg_y1,
 	bg_x2 = C.Layer_get_bg_x2,
 	bg_y2 = C.Layer_get_bg_y2,
-	bg_cx1 = C.Layer_get_bg_cx1,
-	bg_cy1 = C.Layer_get_bg_cy1,
-	bg_cx2 = C.Layer_get_bg_cx2,
-	bg_cy2 = C.Layer_get_bg_cy2,
 	bg_r1 = C.Layer_get_bg_r1,
 	bg_r2 = C.Layer_get_bg_r2,
 	bg_color_stop_count = C.Layer_get_bg_color_stop_count,
@@ -471,18 +456,15 @@ local setters = {
 	border_width_right = C.Layer_set_border_width_right,
 	border_width_top = C.Layer_set_border_width_top,
 	border_width_bottom = C.Layer_set_border_width_bottom,
-	border_width = C.Layer_set_border_width,
 	corner_radius_top_left = C.Layer_set_corner_radius_top_left,
 	corner_radius_top_right = C.Layer_set_corner_radius_top_right,
 	corner_radius_bottom_left = C.Layer_set_corner_radius_bottom_left,
 	corner_radius_bottom_right = C.Layer_set_corner_radius_bottom_right,
 	corner_radius_kappa = C.Layer_set_corner_radius_kappa,
-	corner_radius = C.Layer_set_corner_radius,
 	border_color_left = C.Layer_set_border_color_left,
 	border_color_right = C.Layer_set_border_color_right,
 	border_color_top = C.Layer_set_border_color_top,
 	border_color_bottom = C.Layer_set_border_color_bottom,
-	border_color = C.Layer_set_border_color,
 	border_dash_count = C.Layer_set_border_dash_count,
 	border_dash_offset = C.Layer_set_border_dash_offset,
 	border_line_to = C.Layer_set_border_line_to,
@@ -495,10 +477,6 @@ local setters = {
 	bg_y1 = C.Layer_set_bg_y1,
 	bg_x2 = C.Layer_set_bg_x2,
 	bg_y2 = C.Layer_set_bg_y2,
-	bg_cx1 = C.Layer_set_bg_cx1,
-	bg_cy1 = C.Layer_set_bg_cy1,
-	bg_cx2 = C.Layer_set_bg_cx2,
-	bg_cy2 = C.Layer_set_bg_cy2,
 	bg_r1 = C.Layer_set_bg_r1,
 	bg_r2 = C.Layer_set_bg_r2,
 	bg_color_stop_count = C.Layer_set_bg_color_stop_count,
