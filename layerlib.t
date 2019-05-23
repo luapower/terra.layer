@@ -112,15 +112,17 @@ BorderLineToFunc = {&Layer, &context, num, num, num} -> {}
 BorderLineToFunc.__typename_ffi = 'BorderLineToFunc'
 
 struct Border (gettersandsetters) {
-	left   : num;
-	right  : num;
-	top    : num;
-	bottom : num;
+
+	width_left   : num;
+	width_right  : num;
+	width_top    : num;
+	width_bottom : num;
 
 	corner_radius_top_left     : num;
 	corner_radius_top_right    : num;
 	corner_radius_bottom_left  : num;
 	corner_radius_bottom_right : num;
+
 	--draw rounded corners with a modified bezier for smoother line-to-arc
 	--transitions. kappa=1 uses circle arcs instead.
 	corner_radius_kappa: num;
@@ -138,6 +140,7 @@ struct Border (gettersandsetters) {
 	offset: num;
 
 	line_to: BorderLineToFunc;
+
 }
 
 terra Border:init()
@@ -166,22 +169,11 @@ struct ColorStop {
 	color: color;
 }
 
-struct LinearGradientPoints {
-	x1: num; y1: num;
-	x2: num; y2: num;
-}
-
-struct RadialGradientCircles {
-	cx1: num; cy1: num; r1: num;
-	cx2: num; cy2: num; r2: num;
-}
-
 struct BackgroundGradient {
 	color_stops: arr(ColorStop);
-	union {
-		points: LinearGradientPoints;
-		circles: RadialGradientCircles;
-	}
+	x1: num; y1: num;
+	x2: num; y2: num;
+	r1: num; r2: num;
 }
 
 terra BackgroundGradient:free()
@@ -191,31 +183,25 @@ end
 struct BackgroundPattern {
 	x: num;
 	y: num;
-	union {
-		gradient: BackgroundGradient;
-		bitmap: Bitmap;
-	};
+	gradient: BackgroundGradient;
+	bitmap: Bitmap;
 	pattern: &pattern;
 	transform: Transform;
 	extend: enum; --BG_EXTEND_*
 }
 
 terra BackgroundPattern:init()
-	fill(self)
 	self.transform:init()
 	self.extend = BG_EXTEND_REPEAT
 end
 
-terra BackgroundPattern:free(type: enum)
+terra BackgroundPattern:free()
 	if self.pattern ~= nil then
 		self.pattern:free()
 		self.pattern = nil
 	end
-	if type == BG_IMAGE then
-		self.bitmap:free()
-	else
-		self.gradient:free()
-	end
+	self.bitmap:free()
+	self.gradient:free()
 end
 
 struct Background (gettersandsetters) {
@@ -225,140 +211,30 @@ struct Background (gettersandsetters) {
 	-- overlapping between bg clipping edge and border stroke.
 	-- -1..1 goes from inside to outside of border edge.
 	clip_border_offset: num;
-	union {
-		_color: color;
-		pattern: BackgroundPattern;
-	};
+	color: color;
+	pattern: BackgroundPattern;
 }
-
-terra Background:get_type() return self._type end
 
 terra Background:init()
 	self.hittable = true
 	self.clip_border_offset = 1 --border fully overlaps the background
+	self.pattern:init()
 end
 
 terra Background:free()
-	if (self.type and BG_PATTERN) ~= 0 then
-		self.pattern:free(self.type)
-	end
+	self.pattern:free()
 end
+
+terra Background:get_type() return self._type end
 
 terra Background:set_type(v: enum)
-	if self.type == v then return end
-	self:free()
+	if v == self.type then return end
+	if self.pattern.pattern ~= nil then
+		self.pattern.pattern:free()
+		self.pattern.pattern = nil
+	end
 	self._type = v
-	if (self.type and BG_PATTERN) ~= 0 then
-		self.pattern:init()
-	elseif self.type == BG_COLOR then
-		self._color.uint = 0
-	end
 end
-
-terra Background:get_color()
-	return iif(self.type == BG_COLOR, self._color, color{uint = 0})
-end
-
-terra Background:set_color(v: color)
-	if self.type == BG_COLOR then
-		self._color = v
-	end
-end
-
-terra Background:get_color_stop_count()
-	return iif((self.type and BG_GRADIENT) ~= 0,
-		self.pattern.gradient.color_stops.len, 0)
-end
-
-terra Background:set_color_stop_count(n: int)
-	if (self.type and BG_GRADIENT) ~= 0 then
-		self.pattern.gradient.color_stops:setlen(n, ColorStop{0, 0})
-	end
-end
-
-terra Background:get_color_stop_color(i: int)
-	if (self.type and BG_GRADIENT) ~= 0 then
-		var cs = self.pattern.gradient.color_stops:at(i, nil)
-		return iif(cs ~= nil, cs.color.uint, 0)
-	else
-		return 0
-	end
-end
-
-terra Background:get_color_stop_offset(i: int)
-	if (self.type and BG_GRADIENT) ~= 0 then
-		var cs = self.pattern.gradient.color_stops:at(i, nil)
-		return iif(cs ~= nil, cs.offset, 0)
-	else
-		return 0
-	end
-end
-
-terra Background:set_color_stop_color(i: int, color: uint32)
-	if (self.type and BG_GRADIENT) ~= 0 then
-		self.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).color.uint = color
-	end
-end
-
-terra Background:set_color_stop_offset(i: int, offset: num)
-	if (self.type and BG_GRADIENT) ~= 0 then
-		self.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).offset = offset
-	end
-end
-
-terra Background:get_image()
-	return iif(self.type == BG_IMAGE, &self.pattern.bitmap, nil)
-end
-
-terra Background:set_image(v: &Bitmap)
-	if self.type == BG_IMAGE then
-		self.pattern.bitmap = @v
-	end
-end
-
-local get = function(self, FIELD)
-	return `iif((self.type and BG_PATTERN) ~= 0, self.pattern.[FIELD], 0)
-end
-terra Background:get_x      () return [get(self, 'x')] end
-terra Background:get_y      () return [get(self, 'y')] end
-terra Background:get_extend () return [get(self, 'extend')] end
-
-local set = function(self, FIELD, val)
-	return quote
-		if (self.type and BG_PATTERN) ~= 0 then
-			self.pattern.[FIELD] = val
-		end
-	end
-end
-terra Background:set_x      (v: num)  [set(self, 'x', v)] end
-terra Background:set_y      (v: num)  [set(self, 'y', v)] end
-terra Background:set_extend (v: enum) [set(self, 'extend', v)] end
-
-local get = function(self, FIELD, default)
-	default = default or 0
-	return `iif((self.type and BG_PATTERN) ~= 0,
-		self.pattern.transform.[FIELD], default)
-end
-terra Background:get_rotation    () return [get(self, 'rotation'   )] end
-terra Background:get_rotation_cx () return [get(self, 'rotation_cx')] end
-terra Background:get_rotation_cy () return [get(self, 'rotation_cy')] end
-terra Background:get_scale       () return [get(self, 'scale', 1   )] end
-terra Background:get_scale_cx    () return [get(self, 'scale_cx'   )] end
-terra Background:get_scale_cy    () return [get(self, 'scale_cy'   )] end
-
-local set = function(self, FIELD, val)
-	return quote
-		if (self.type and BG_PATTERN) ~= 0 then
-			self.pattern.transform.[FIELD] = val
-		end
-	end
-end
-terra Background:set_rotation    (v: num) [set(self, 'rotation', v)] end
-terra Background:set_rotation_cx (v: num) [set(self, 'rotation_cx', v)] end
-terra Background:set_rotation_cy (v: num) [set(self, 'rotation_cy', v)] end
-terra Background:set_scale       (v: num) [set(self, 'scale', v)] end
-terra Background:set_scale_cx    (v: num) [set(self, 'scale_cx', v)] end
-terra Background:set_scale_cy    (v: num) [set(self, 'scale_cy', v)] end
 
 --shadow ---------------------------------------------------------------------
 
@@ -454,7 +330,6 @@ struct LayoutSolver {
 	type       : enum; --LAYOUT_*
 	axis_order : enum; --AXIS_ORDER_*
 	init       : {&Layer} -> {};
-	free       : {&Layer} -> {};
 	sync       : {&Layer} -> {};
 	sync_min_w : {&Layer, bool} -> num;
 	sync_min_h : {&Layer, bool} -> num;
@@ -470,11 +345,6 @@ struct FlexLayout {
 	flow: enum; --FLEX_FLOW_*
 	wrap: bool;
 }
-
-terra FlexLayout:init()
-	fill(self)
-	self.wrap = false
-end
 
 struct GridLayoutCol {
 	x: num;
@@ -507,10 +377,6 @@ struct GridLayout {
 	_cols: arr(GridLayoutCol);
 	_rows: arr(GridLayoutCol);
 }
-
-terra GridLayout:init()
-	fill(self)
-end
 
 terra GridLayout:free()
 	self.col_frs:free()
@@ -575,10 +441,8 @@ struct Layer (gettersandsetters) {
 	align_items_y: enum;  --ALIGN_*
  	item_align_x: enum;   --ALIGN_*
 	item_align_y: enum;   --ALIGN_*
-	union {
-		flex: FlexLayout;
-		grid: GridLayout;
-	}
+	flex: FlexLayout;
+	grid: GridLayout;
 
 	--child of flex layouts
 	_min_w: num;
@@ -607,7 +471,6 @@ struct Layer (gettersandsetters) {
 
 terra Layer.methods.free :: {&Layer} -> {}
 terra Layer.methods.init_layout :: {&Layer} -> {}
-terra Layer.methods.free_layout :: {&Layer} -> {}
 
 terra Layer:get_parent() return self._parent end
 
@@ -646,7 +509,7 @@ terra Layer:free()
 	self.bg:free()
 	self.shadows:free()
 	self.text:free()
-	self:free_layout()
+	self.grid:free()
 	realloc(self, 0) --TODO: this belongs in free_and_dealloc
 end
 
@@ -758,13 +621,6 @@ terra Layer:set_padding_left  (v: num) self.padding_left   = v end
 terra Layer:set_padding_right (v: num) self.padding_right  = v end
 terra Layer:set_padding_top   (v: num) self.padding_top    = v end
 terra Layer:set_padding_bottom(v: num) self.padding_bottom = v end
-
-terra Layer:set_padding(v: num)
-	self.padding_left   = v
-	self.padding_right  = v
-	self.padding_top    = v
-	self.padding_bottom = v
-end
 
 terra Layer:get_px() return self.padding_left end
 terra Layer:get_py() return self.padding_top end
@@ -889,10 +745,10 @@ end
 --returned widths are positive when inside and negative when outside box rect.
 terra Border:edge_widths(offset: num, max_w: num, max_h: num)
 	var o = self.offset + offset + 1
-	var w1 = lerp(o, -1, 1, self.left,   0)
-	var h1 = lerp(o, -1, 1, self.top,    0)
-	var w2 = lerp(o, -1, 1, self.right,  0)
-	var h2 = lerp(o, -1, 1, self.bottom, 0)
+	var w1 = lerp(o, -1, 1, self.width_left,   0)
+	var h1 = lerp(o, -1, 1, self.width_top,    0)
+	var w2 = lerp(o, -1, 1, self.width_right,  0)
+	var h2 = lerp(o, -1, 1, self.width_bottom, 0)
 	--adjust overlapping widths by scaling them down proportionally.
 	if w1 + w2 > max_w or h1 + h2 > max_h then
 		var scale = min(max_w / (w1 + w2), max_h / (h1 + h2))
@@ -1070,10 +926,10 @@ end
 
 terra Layer:border_visible()
 	return
-		   self.border.left   ~= 0
-		or self.border.top    ~= 0
-		or self.border.right  ~= 0
-		or self.border.bottom ~= 0
+		   self.border.width_left   ~= 0
+		or self.border.width_top    ~= 0
+		or self.border.width_right  ~= 0
+		or self.border.width_bottom ~= 0
 end
 
 terra Layer:draw_border(cr: &context)
@@ -1088,12 +944,12 @@ terra Layer:draw_border(cr: &context)
 	then
 		cr:new_path()
 		cr:rgba(self.border.color_bottom)
-		if self.border.left == self.border.top
-			and self.border.left == self.border.right
-			and self.border.left == self.border.bottom
+		if self.border.width_left == self.border.width_top
+			and self.border.width_left == self.border.width_right
+			and self.border.width_left == self.border.width_bottom
 		then --stroke-based terra (doesn't require path offseting; supports dashing)
 			self:border_path(cr, 0, 0)
-			cr:line_width(self.border.left)
+			cr:line_width(self.border.width_left)
 			if self.border.dash.len > 0 then
 				cr:dash(self.border.dash.elements, self.border.dash.len, self.border.dash_offset)
 			end
@@ -1194,11 +1050,9 @@ terra Background:pattern()
 		if (self.type and BG_GRADIENT) ~= 0 then
 			var g = p.gradient
 			if self.type == BG_LINEAR_GRADIENT then
-				var c = g.points
-				p.pattern = cairo_pattern_create_linear(c.x1, c.y1, c.x2, c.y2)
+				p.pattern = cairo_pattern_create_linear(g.x1, g.y1, g.x2, g.y2)
 			else
-				var c = g.circles
-				p.pattern = cairo_pattern_create_radial(c.cx1, c.cy1, c.r1, c.cx2, c.cy2, c.r2)
+				p.pattern = cairo_pattern_create_radial(g.x1, g.y1, g.r1, g.x2, g.y2, g.r2)
 			end
 			for _,c in g.color_stops do
 				p.pattern:add_color_stop_rgba(c.offset, c.color)
@@ -1787,7 +1641,6 @@ null_layout = constant(`LayoutSolver {
 	type       = LAYOUT_NULL;
 	axis_order = 0;
 	init       = nil;
-	free       = nil;
 	sync       = null_sync;
 	sync_min_w = null_sync_min_w;
 	sync_min_h = null_sync_min_h;
@@ -1862,7 +1715,6 @@ text_layout = constant(`LayoutSolver {
 	type       = LAYOUT_TEXT;
 	axis_order = 0;
 	init       = nil;
-	free       = nil;
 	sync       = text_sync;
 	sync_min_w = text_sync_min_w;
 	sync_min_h = text_sync_min_h;
@@ -2454,15 +2306,9 @@ local terra flex_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-local terra flex_init(self: &Layer)
-	self.flex:init()
-end
-
 flex_layout = constant(`LayoutSolver {
 	type       = LAYOUT_FLEX;
 	axis_order = AXIS_ORDER_XY;
-	init       = flex_init;
-	free       = nil;
 	sync       = flex_sync;
 	sync_min_w = flex_sync_min_w;
 	sync_min_h = flex_sync_min_h;
@@ -2995,19 +2841,9 @@ local terra grid_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-local terra grid_init(self: &Layer)
-	self.grid:init()
-end
-
-local terra grid_free(self: &Layer)
-	self.grid:free()
-end
-
 grid_layout = constant(`LayoutSolver {
 	type       = LAYOUT_GRID;
 	axis_order = AXIS_ORDER_XY;
-	init       = grid_init;
-	free       = grid_free;
 	sync       = grid_sync;
 	sync_min_w = grid_sync_min_w;
 	sync_min_h = grid_sync_min_h;
@@ -3029,9 +2865,6 @@ layouts = constant(`arrayof(LayoutSolver,
 terra Layer:get_layout_type() return self.layout_solver.type end
 
 terra Layer:set_layout_type(type: enum)
-	if self.layout_solver.free ~= nil then
-		self.layout_solver.free(self)
-	end
 	self.layout_solver = &layouts[type]
 	if self.layout_solver.init ~= nil then
 		self.layout_solver.init(self)
@@ -3040,10 +2873,6 @@ end
 
 terra Layer:init_layout()
 	self.layout_solver = &null_layout
-end
-
-terra Layer:free_layout()
-	self.layout_type = LAYOUT_NULL
 end
 
 --lib ------------------------------------------------------------------------
@@ -3138,25 +2967,17 @@ terra Layer:set_scale_cy    (v: num) self.transform.scale_cy    = v end
 
 do end --borders
 
-terra Layer:get_border_width_left   () return self.border.left   end
-terra Layer:get_border_width_right  () return self.border.right  end
-terra Layer:get_border_width_top    () return self.border.top    end
-terra Layer:get_border_width_bottom () return self.border.bottom end
-
 terra Layer:border_shape_changed() end --TODO
 
-terra Layer:set_border_width_left   (v: num) self.border.left    = v; self:border_shape_changed() end
-terra Layer:set_border_width_right  (v: num) self.border.right   = v; self:border_shape_changed() end
-terra Layer:set_border_width_top    (v: num) self.border.top     = v; self:border_shape_changed() end
-terra Layer:set_border_width_bottom (v: num) self.border.bottom  = v; self:border_shape_changed() end
+terra Layer:get_border_width_left   () return self.border.width_left   end
+terra Layer:get_border_width_right  () return self.border.width_right  end
+terra Layer:get_border_width_top    () return self.border.width_top    end
+terra Layer:get_border_width_bottom () return self.border.width_bottom end
 
-terra Layer:set_border_width(v: num)
-	self.border.left   = v
-	self.border.right  = v
-	self.border.top    = v
-	self.border.bottom = v
-	self:border_shape_changed()
-end
+terra Layer:set_border_width_left   (v: num) self.border.width_left   = v; self:border_shape_changed() end
+terra Layer:set_border_width_right  (v: num) self.border.width_right  = v; self:border_shape_changed() end
+terra Layer:set_border_width_top    (v: num) self.border.width_top    = v; self:border_shape_changed() end
+terra Layer:set_border_width_bottom (v: num) self.border.width_bottom = v; self:border_shape_changed() end
 
 terra Layer:get_corner_radius_top_left     () return self.border.corner_radius_top_left     end
 terra Layer:get_corner_radius_top_right    () return self.border.corner_radius_top_right    end
@@ -3170,14 +2991,6 @@ terra Layer:set_corner_radius_bottom_left  (v: num) self.border.corner_radius_bo
 terra Layer:set_corner_radius_bottom_right (v: num) self.border.corner_radius_bottom_right = v; self:border_shape_changed() end
 terra Layer:set_corner_radius_kappa        (v: num) self.border.corner_radius_kappa        = v; self:border_shape_changed() end
 
-terra Layer:set_corner_radius(v: num)
-	self.border.corner_radius_top_left     = v
-	self.border.corner_radius_top_right    = v
-	self.border.corner_radius_bottom_left  = v
-	self.border.corner_radius_bottom_right = v
-	self:border_shape_changed()
-end
-
 terra Layer:get_border_color_left   () return self.border.color_left   .uint end
 terra Layer:get_border_color_right  () return self.border.color_right  .uint end
 terra Layer:get_border_color_top    () return self.border.color_top    .uint end
@@ -3187,13 +3000,6 @@ terra Layer:set_border_color_left   (v: uint32) self.border.color_left   .uint =
 terra Layer:set_border_color_right  (v: uint32) self.border.color_right  .uint = v end
 terra Layer:set_border_color_top    (v: uint32) self.border.color_top    .uint = v end
 terra Layer:set_border_color_bottom (v: uint32) self.border.color_bottom .uint = v end
-
-terra Layer:set_border_color(v: uint32)
-	self.border.color_left   .uint = v
-	self.border.color_right  .uint = v
-	self.border.color_top    .uint = v
-	self.border.color_bottom .uint = v
-end
 
 terra Layer:get_border_dash_count() return self.border.dash.len end
 terra Layer:set_border_dash_count(v: int) self.border.dash:setlen(v, 0) end
@@ -3228,83 +3034,75 @@ terra Layer:set_bg_clip_border_offset(v: num) self.bg.clip_border_offset = v end
 terra Layer:get_bg_color() return self.bg.color end
 terra Layer:set_bg_color(v: uint) self.bg.color = color{uint = v} end
 
-local get = function(self, FIELD)
-	return `iif(self.bg_type == BG_LINEAR_GRADIENT,
-		self.bg.pattern.gradient.points.[FIELD], 0)
+terra Layer:get_bg_x1() return self.bg.pattern.gradient.x1 end
+terra Layer:get_bg_y1() return self.bg.pattern.gradient.y1 end
+terra Layer:get_bg_x2() return self.bg.pattern.gradient.x2 end
+terra Layer:get_bg_y2() return self.bg.pattern.gradient.y2 end
+terra Layer:get_bg_r1() return self.bg.pattern.gradient.r1 end
+terra Layer:get_bg_r2() return self.bg.pattern.gradient.r2 end
+
+terra Layer:set_bg_x1(v: num) self.bg.pattern.gradient.x1 = v end
+terra Layer:set_bg_y1(v: num) self.bg.pattern.gradient.y1 = v end
+terra Layer:set_bg_x2(v: num) self.bg.pattern.gradient.x2 = v end
+terra Layer:set_bg_y2(v: num) self.bg.pattern.gradient.y2 = v end
+terra Layer:set_bg_r1(v: num) self.bg.pattern.gradient.r1 = v end
+terra Layer:set_bg_r2(v: num) self.bg.pattern.gradient.r2 = v end
+
+terra Layer:get_bg_color_stop_count()
+	return self.bg.pattern.gradient.color_stops.len
 end
-terra Layer:get_bg_x1() return [get(self, 'x1')] end
-terra Layer:get_bg_y1() return [get(self, 'y1')] end
-terra Layer:get_bg_x2() return [get(self, 'x2')] end
-terra Layer:get_bg_y2() return [get(self, 'y2')] end
 
-local set = function(self, FIELD, val)
-	return quote
-		if self.bg_type == BG_LINEAR_GRADIENT then
-			self.bg.pattern.gradient.points.[FIELD] = val
-		end
-	end
+terra Layer:set_bg_color_stop_count(n: int)
+	self.bg.pattern.gradient.color_stops:setlen(n, ColorStop{0, 0})
 end
-terra Layer:set_bg_x1(x1: num) [set(self, 'x1', x1)] end
-terra Layer:set_bg_y1(y1: num) [set(self, 'y1', y1)] end
-terra Layer:set_bg_x2(x2: num) [set(self, 'x2', x2)] end
-terra Layer:set_bg_y2(y2: num) [set(self, 'y2', y2)] end
 
-local get = function(self, FIELD)
-	return `iif(self.bg_type == BG_RADIAL_GRADIENT,
-		self.bg.pattern.gradient.circles.[FIELD], 0)
+terra Layer:get_bg_color_stop_color(i: int)
+	var cs = self.bg.pattern.gradient.color_stops:at(i, nil)
+	return iif(cs ~= nil, cs.color.uint, 0)
 end
-terra Layer:get_bg_cx1() return [get(self, 'cx1')] end
-terra Layer:get_bg_cy1() return [get(self, 'cy1')] end
-terra Layer:get_bg_cx2() return [get(self, 'cx2')] end
-terra Layer:get_bg_cy2() return [get(self, 'cy2')] end
-terra Layer:get_bg_r1 () return [get(self, 'r1' )] end
-terra Layer:get_bg_r2 () return [get(self, 'r2' )] end
 
-local set = function(self, FIELD, val)
-	return quote
-		if self.bg_type == BG_RADIAL_GRADIENT then
-			self.bg.pattern.gradient.circles.[FIELD] = val
-		end
-	end
+terra Layer:get_bg_color_stop_offset(i: int)
+	var cs = self.bg.pattern.gradient.color_stops:at(i, nil)
+	return iif(cs ~= nil, cs.offset, 0)
 end
-terra Layer:set_bg_cx1(cx1: num) [set(self, 'cx1', cx1)] end
-terra Layer:set_bg_cy1(cy1: num) [set(self, 'cy1', cy1)] end
-terra Layer:set_bg_cx2(cx2: num) [set(self, 'cx2', cx2)] end
-terra Layer:set_bg_cy2(cy2: num) [set(self, 'cy2', cy2)] end
-terra Layer:set_bg_r1 (r1 : num) [set(self, 'r1' , r1 )] end
-terra Layer:set_bg_r2 (r2 : num) [set(self, 'r2' , r2 )] end
 
-terra Layer:get_bg_color_stop_count() return self.bg.color_stop_count end
-terra Layer:set_bg_color_stop_count(n: int) self.bg.color_stop_count = n end
+terra Layer:set_bg_color_stop_color(i: int, color: uint32)
+	self.bg.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).color.uint = color
+end
 
-terra Layer:get_bg_color_stop_color (i: int) return self.bg:get_color_stop_color(i) end
-terra Layer:get_bg_color_stop_offset(i: int) return self.bg:get_color_stop_offset(i) end
-terra Layer:set_bg_color_stop_color (i: int, color: uint32) self.bg:set_color_stop_color(i, color) end
-terra Layer:set_bg_color_stop_offset(i: int, offset: num) self.bg:set_color_stop_offset(i, offset) end
-terra Layer:get_bg_image() return self.bg.image end
-terra Layer:set_bg_image(v: &Bitmap) self.bg.image = v end
+terra Layer:set_bg_color_stop_offset(i: int, offset: num)
+	self.bg.pattern.gradient.color_stops:getat(i, ColorStop{0, 0}).offset = offset
+end
 
-terra Layer:get_bg_x      () return self.bg.x end
-terra Layer:get_bg_y      () return self.bg.y end
-terra Layer:get_bg_extend () return self.bg.extend end
+terra Layer:get_bg_image()
+	return &self.bg.pattern.bitmap
+end
 
-terra Layer:set_bg_x      (v: num)  self.bg.x = v end
-terra Layer:set_bg_y      (v: num)  self.bg.y = v end
-terra Layer:set_bg_extend (v: enum) self.bg.extend = v end
+terra Layer:set_bg_image(v: &Bitmap)
+	self.bg.pattern.bitmap = @v
+end
 
-terra Layer:get_bg_rotation    () return self.bg.rotation    end
-terra Layer:get_bg_rotation_cx () return self.bg.rotation_cx end
-terra Layer:get_bg_rotation_cy () return self.bg.rotation_cy end
-terra Layer:get_bg_scale       () return self.bg.scale       end
-terra Layer:get_bg_scale_cx    () return self.bg.scale_cx    end
-terra Layer:get_bg_scale_cy    () return self.bg.scale_cy    end
+terra Layer:get_bg_x      () return self.bg.pattern.x end
+terra Layer:get_bg_y      () return self.bg.pattern.y end
+terra Layer:get_bg_extend () return self.bg.pattern.extend end
 
-terra Layer:set_bg_rotation    (v: num) self.bg.rotation = v end
-terra Layer:set_bg_rotation_cx (v: num) self.bg.rotation_cx = v end
-terra Layer:set_bg_rotation_cy (v: num) self.bg.rotation_cy = v end
-terra Layer:set_bg_scale       (v: num) self.bg.scale = v end
-terra Layer:set_bg_scale_cx    (v: num) self.bg.scale_cx = v end
-terra Layer:set_bg_scale_cy    (v: num) self.bg.scale_cy = v end
+terra Layer:set_bg_x      (v: num)  self.bg.pattern.x = v end
+terra Layer:set_bg_y      (v: num)  self.bg.pattern.y = v end
+terra Layer:set_bg_extend (v: enum) self.bg.pattern.extend = v end
+
+terra Layer:get_bg_rotation    () return self.bg.pattern.transform.rotation    end
+terra Layer:get_bg_rotation_cx () return self.bg.pattern.transform.rotation_cx end
+terra Layer:get_bg_rotation_cy () return self.bg.pattern.transform.rotation_cy end
+terra Layer:get_bg_scale       () return self.bg.pattern.transform.scale       end
+terra Layer:get_bg_scale_cx    () return self.bg.pattern.transform.scale_cx    end
+terra Layer:get_bg_scale_cy    () return self.bg.pattern.transform.scale_cy    end
+
+terra Layer:set_bg_rotation    (v: num) self.bg.pattern.transform.rotation = v end
+terra Layer:set_bg_rotation_cx (v: num) self.bg.pattern.transform.rotation_cx = v end
+terra Layer:set_bg_rotation_cy (v: num) self.bg.pattern.transform.rotation_cy = v end
+terra Layer:set_bg_scale       (v: num) self.bg.pattern.transform.scale = v end
+terra Layer:set_bg_scale_cx    (v: num) self.bg.pattern.transform.scale_cx = v end
+terra Layer:set_bg_scale_cy    (v: num) self.bg.pattern.transform.scale_cy = v end
 
 do end --shadows
 
@@ -3664,7 +3462,6 @@ function build()
 		set_padding_top=1,
 		set_padding_right=1,
 		set_padding_bottom=1,
-		set_padding=1,
 
 		--transforms
 
@@ -3721,7 +3518,6 @@ function build()
 		set_border_width_right  =1,
 		set_border_width_top    =1,
 		set_border_width_bottom =1,
-		set_border_width=1,
 
 		get_corner_radius_top_left     =1,
 		get_corner_radius_top_right    =1,
@@ -3734,7 +3530,6 @@ function build()
 		set_corner_radius_bottom_left  =1,
 		set_corner_radius_bottom_right =1,
 		set_corner_radius_kappa        =1,
-		set_corner_radius=1,
 
 		get_border_color_left   =1,
 		get_border_color_right  =1,
@@ -3745,7 +3540,6 @@ function build()
 		set_border_color_right  =1,
 		set_border_color_top    =1,
 		set_border_color_bottom =1,
-		set_border_color=1,
 
 		get_border_dash_count=1,
 		set_border_dash_count=1,
@@ -3770,23 +3564,13 @@ function build()
 		get_bg_y1=1,
 		get_bg_x2=1,
 		get_bg_y2=1,
+		get_bg_r1 =1,
+		get_bg_r2 =1,
 
 		set_bg_x1=1,
 		set_bg_y1=1,
 		set_bg_x2=1,
 		set_bg_y2=1,
-
-		get_bg_cx1=1,
-		get_bg_cy1=1,
-		get_bg_cx2=1,
-		get_bg_cy2=1,
-		get_bg_r1 =1,
-		get_bg_r2 =1,
-
-		set_bg_cx1=1,
-		set_bg_cy1=1,
-		set_bg_cx2=1,
-		set_bg_cy2=1,
 		set_bg_r1 =1,
 		set_bg_r2 =1,
 
@@ -3987,6 +3771,7 @@ end
 
 if not ... then
 	build()
+	print(sizeof(Layer))
 end
 
 return _M

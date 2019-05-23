@@ -55,7 +55,7 @@ e.border_color_left   = 0xff00ffff
 e.border_color_top    = 0xffff00ff
 e.border_color_right  = 0x008800ff
 e.border_color_bottom = 0x888888ff
-e.corner_radius_bottom_left = 20
+e.corner_radius_bottom_left  = 20
 e.corner_radius_bottom_right = 10
 e.corner_radius_kappa = 1.2
 
@@ -94,8 +94,6 @@ e.layout_type = ll.LAYOUT_FLEX
 e1.clip = ll.CLIP_BG
 e2.clip = ll.CLIP_PADDING
 
-e1.bg_type = ll.BG_COLOR
-e1.bg_color = 0x33333366
 e2.bg_type = ll.BG_COLOR
 e2.bg_color = 0x33333366
 
@@ -110,7 +108,7 @@ e2.min_cw = 10; e2.min_ch = 10
 --llib.glyph_cache_size = 0
 --llib.glyph_run_cache_size = 0
 
-e1:set_text_utf8(s, -1)
+--e1:set_text_utf8(s, -1)
 e1:set_text_span_font_id  (0, font1_id)
 e1:set_text_span_font_size(0, 14)
 e1:set_text_span_color    (0, 0xffffffff)
@@ -121,32 +119,32 @@ e1:set_shadow_x       (2, 1)
 e1:set_shadow_y       (2, 1)
 e1:set_shadow_blur    (2, 1)
 e1:set_shadow_color   (2, 0x000000ff)
-e1:set_shadow_content (2, true)
+--e1:set_shadow_content (2, true)
 e1:set_shadow_inset   (2, false)
 
 --e1.visible = false
 --e2.visible = false
 
 do local e = e2
-e:set_text_utf8('Yea but it\'s live!!', -1)
-e:set_text_span_font_id  (0, font2_id)
-e:set_text_span_font_size(0, 100)
-e:set_text_span_color    (0, 0x333333ff)
-e.text_align_y = ll.ALIGN_CENTER
-e.text_align_x = ll.ALIGN_CENTER
+--e:set_text_utf8('Yea but it\'s live!!', -1)
+--e:set_text_span_font_id  (0, font2_id)
+--e:set_text_span_font_size(0, 100)
+--e:set_text_span_color    (0, 0x333333ff)
+--e.text_align_y = ll.ALIGN_CENTER
+--e.text_align_x = ll.ALIGN_CENTER
 
 e:set_shadow_x       (0, 0)
 e:set_shadow_y       (0, 1)
 e:set_shadow_blur    (0, 2)
 e:set_shadow_color   (0, 0x000000ff)
-e:set_shadow_content (0, true)
+--e:set_shadow_content (0, true)
 e:set_shadow_inset   (0, true)
 
 e:set_shadow_x       (1, 0)
 e:set_shadow_y       (1, 1)
 e:set_shadow_blur    (1, 1)
 e:set_shadow_color   (1, 0x888888ff)
-e:set_shadow_content (1, true)
+--e:set_shadow_content (1, true)
 e:set_shadow_inset   (1, false)
 end
 
