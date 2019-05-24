@@ -72,7 +72,7 @@ e:set_bg_color_stop_offset(0, 0)
 e:set_bg_color_stop_offset(1, 1)
 e:set_bg_color_stop_color(0, 0xff0000ff)
 e:set_bg_color_stop_color(1, 0x0000ffff)
-e.bg_cx1 = 1
+e.bg_x1 = 1
 
 e:set_shadow_x       (0, 6)
 e:set_shadow_y       (0, 6)
@@ -119,7 +119,7 @@ e1:set_shadow_x       (2, 1)
 e1:set_shadow_y       (2, 1)
 e1:set_shadow_blur    (2, 1)
 e1:set_shadow_color   (2, 0x000000ff)
---e1:set_shadow_content (2, true)
+e1:set_shadow_content (2, true)
 e1:set_shadow_inset   (2, false)
 
 --e1.visible = false
@@ -127,24 +127,24 @@ e1:set_shadow_inset   (2, false)
 
 do local e = e2
 --e:set_text_utf8('Yea but it\'s live!!', -1)
---e:set_text_span_font_id  (0, font2_id)
---e:set_text_span_font_size(0, 100)
---e:set_text_span_color    (0, 0x333333ff)
---e.text_align_y = ll.ALIGN_CENTER
---e.text_align_x = ll.ALIGN_CENTER
+e:set_text_span_font_id  (0, font2_id)
+e:set_text_span_font_size(0, 100)
+e:set_text_span_color    (0, 0x333333ff)
+e.text_align_y = ll.ALIGN_CENTER
+e.text_align_x = ll.ALIGN_CENTER
 
 e:set_shadow_x       (0, 0)
 e:set_shadow_y       (0, 1)
 e:set_shadow_blur    (0, 2)
 e:set_shadow_color   (0, 0x000000ff)
---e:set_shadow_content (0, true)
+e:set_shadow_content (0, true)
 e:set_shadow_inset   (0, true)
 
 e:set_shadow_x       (1, 0)
 e:set_shadow_y       (1, 1)
 e:set_shadow_blur    (1, 1)
 e:set_shadow_color   (1, 0x888888ff)
---e:set_shadow_content (1, true)
+e:set_shadow_content (1, true)
 e:set_shadow_inset   (1, false)
 end
 
@@ -159,7 +159,7 @@ function win:repaint()
 	local w, h = self:client_size()
 	cr:translate(50, 50)
 	e:sync(w - 100, h - 100)
-	print'synced'
+	--print'synced'
 	e:draw(cr)
 
 	--e1:set_text_utf8('', -1)

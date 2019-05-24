@@ -217,6 +217,7 @@ struct Background (gettersandsetters) {
 
 terra Background:init()
 	self.hittable = true
+	self.operator = OPERATOR_OVER
 	self.clip_border_offset = 1 --border fully overlaps the background
 	self.pattern:init()
 end
@@ -621,6 +622,13 @@ terra Layer:set_padding_left  (v: num) self.padding_left   = v end
 terra Layer:set_padding_right (v: num) self.padding_right  = v end
 terra Layer:set_padding_top   (v: num) self.padding_top    = v end
 terra Layer:set_padding_bottom(v: num) self.padding_bottom = v end
+
+terra Layer:set_padding(v: num)
+	self.padding_left   = v
+	self.padding_right  = v
+	self.padding_top    = v
+	self.padding_bottom = v
+end
 
 terra Layer:get_px() return self.padding_left end
 terra Layer:get_py() return self.padding_top end
@@ -1450,8 +1458,6 @@ terra Layer:draw(cr: &context) --called in parent's content space
 
 	var bm = self:cr_abs_matrix(cr)
 	cr:matrix(&bm)
-
-	var bg = self:bg_visible()
 
 	self:draw_outset_box_shadows(cr)
 
@@ -2979,6 +2985,13 @@ terra Layer:set_border_width_right  (v: num) self.border.width_right  = v; self:
 terra Layer:set_border_width_top    (v: num) self.border.width_top    = v; self:border_shape_changed() end
 terra Layer:set_border_width_bottom (v: num) self.border.width_bottom = v; self:border_shape_changed() end
 
+terra Layer:set_border_width(v: num)
+	self.border_width_left   = v
+	self.border_width_right  = v
+	self.border_width_top    = v
+	self.border_width_bottom = v
+end
+
 terra Layer:get_corner_radius_top_left     () return self.border.corner_radius_top_left     end
 terra Layer:get_corner_radius_top_right    () return self.border.corner_radius_top_right    end
 terra Layer:get_corner_radius_bottom_left  () return self.border.corner_radius_bottom_left  end
@@ -2991,6 +3004,13 @@ terra Layer:set_corner_radius_bottom_left  (v: num) self.border.corner_radius_bo
 terra Layer:set_corner_radius_bottom_right (v: num) self.border.corner_radius_bottom_right = v; self:border_shape_changed() end
 terra Layer:set_corner_radius_kappa        (v: num) self.border.corner_radius_kappa        = v; self:border_shape_changed() end
 
+terra Layer:set_corner_radius(v: num)
+	self.corner_radius_top_left     = v
+	self.corner_radius_top_right    = v
+	self.corner_radius_bottom_left  = v
+	self.corner_radius_bottom_right = v
+end
+
 terra Layer:get_border_color_left   () return self.border.color_left   .uint end
 terra Layer:get_border_color_right  () return self.border.color_right  .uint end
 terra Layer:get_border_color_top    () return self.border.color_top    .uint end
@@ -3000,6 +3020,13 @@ terra Layer:set_border_color_left   (v: uint32) self.border.color_left   .uint =
 terra Layer:set_border_color_right  (v: uint32) self.border.color_right  .uint = v end
 terra Layer:set_border_color_top    (v: uint32) self.border.color_top    .uint = v end
 terra Layer:set_border_color_bottom (v: uint32) self.border.color_bottom .uint = v end
+
+terra Layer:set_border_color(v: uint32)
+	self.border_color_left   = v
+	self.border_color_right  = v
+	self.border_color_top    = v
+	self.border_color_bottom = v
+end
 
 terra Layer:get_border_dash_count() return self.border.dash.len end
 terra Layer:set_border_dash_count(v: int) self.border.dash:setlen(v, 0) end
@@ -3462,6 +3489,7 @@ function build()
 		set_padding_top=1,
 		set_padding_right=1,
 		set_padding_bottom=1,
+		set_padding=1,
 
 		--transforms
 
@@ -3518,6 +3546,7 @@ function build()
 		set_border_width_right  =1,
 		set_border_width_top    =1,
 		set_border_width_bottom =1,
+		set_border_width        =1,
 
 		get_corner_radius_top_left     =1,
 		get_corner_radius_top_right    =1,
@@ -3530,6 +3559,7 @@ function build()
 		set_corner_radius_bottom_left  =1,
 		set_corner_radius_bottom_right =1,
 		set_corner_radius_kappa        =1,
+		set_corner_radius              =1,
 
 		get_border_color_left   =1,
 		get_border_color_right  =1,
@@ -3540,6 +3570,7 @@ function build()
 		set_border_color_right  =1,
 		set_border_color_top    =1,
 		set_border_color_bottom =1,
+		set_border_color        =1,
 
 		get_border_dash_count=1,
 		set_border_dash_count=1,
