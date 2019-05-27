@@ -391,7 +391,6 @@ end
 --lib ------------------------------------------------------------------------
 
 struct Lib (gettersandsetters) {
-	top_layers: arr(&Layer);
 	text_renderer: tr.Renderer;
 	grid_occupied: BoolBitmap;
 	default_text_span: tr.Span;
@@ -401,26 +400,26 @@ struct Lib (gettersandsetters) {
 
 --layer ----------------------------------------------------------------------
 
-CLIP_NONE    = 0
-CLIP_PADDING = 1
-CLIP_BG      = 2
+CLIP_NONE       = 0
+CLIP_PADDING    = 1
+CLIP_BACKGROUND = 2
 
 struct Layer (gettersandsetters) {
 
 	lib: &Lib;
 	_parent: &Layer;
-	children: arr(&Layer);
+	children: arr{T = &Layer, own_elements = false};
 
 	x: num;
 	y: num;
 	_w: num;
 	_h: num;
 
-	visible  : bool;
-	operator : enum;
-	clip     : enum; --CLIP_*
-	snap_x   : bool; --snap to pixels on x-axis
-	snap_y   : bool; --snap to pixels on y-axis
+	visible      : bool;
+	operator     : enum;
+	clip_content : enum; --CLIP_*
+	snap_x       : bool; --snap to pixels on x-axis
+	snap_y       : bool; --snap to pixels on y-axis
 
 	opacity: num;
 
@@ -477,10 +476,6 @@ terra Layer.methods.init_layout :: {&Layer} -> {}
 
 terra Layer:get_parent() return self._parent end
 
-terra Layer:get_owner_array()
-	return iif(self.parent ~= nil, &self.parent.children, &self.lib.top_layers)
-end
-
 terra Layer:init(lib: &Lib, parent: &Layer)
 	fill(self)
 	self.lib = lib
@@ -506,24 +501,38 @@ terra Layer:init(lib: &Lib, parent: &Layer)
 	self:init_layout()
 end
 
+terra Layer.methods.free :: {&Layer} -> {}
+
 terra Layer:free()
+	for _,e in self.children do
+		(@e)._parent = nil
+	end
 	self.children:free()
 	self.border:free()
 	self.background:free()
 	self.shadows:free()
 	self.text:free()
 	self.grid:free()
-	realloc(self, 0) --TODO: this belongs in free_and_dealloc
 end
 
 terra Lib:layer(parent: &Layer)
 	var layer = new(Layer, self, parent)
-	layer.owner_array:add(layer)
+	if parent ~= nil then
+		parent.children:add(layer)
+	end
 	return layer
 end
 
+terra Layer:remove()
+	if self.parent ~= nil then
+		self.parent.children:remove(self.parent.children:find(self))
+	end
+	self._parent = nil
+end
+
 terra Layer:free_and_dealloc()
-	self.owner_array:remove(self.owner_array:find(self))
+	self:remove()
+	free(self)
 end
 
 --layer invalidation fw. decl.
@@ -556,14 +565,12 @@ terra Layer:move(parent: &Layer, i: int)
 			parent.children:move(self.index, i)
 		end
 	else
-		if self.parent ~= nil then
-			self.parent.children:remove(self.index)
-		end
+		self:remove()
 		if parent ~= nil then
 			i = clamp(i, 0, parent.children.len)
 			parent.children:insert(i, self)
+			self._parent = parent
 		end
-		self._parent = parent
 	end
 end
 
@@ -957,14 +964,17 @@ terra Layer:draw_border(cr: &context)
 		if self.border.width_left == self.border.width_top
 			and self.border.width_left == self.border.width_right
 			and self.border.width_left == self.border.width_bottom
-		then --stroke-based terra (doesn't require path offseting; supports dashing)
+		then --stroke-based drawing (doesn't require path offseting; supports dashing)
 			self:border_path(cr, 0, 0)
 			cr:line_width(self.border.width_left)
 			if self.border.dash.len > 0 then
-				cr:dash(self.border.dash.elements, self.border.dash.len, self.border.dash_offset)
+				cr:dash(
+					self.border.dash.elements,
+					self.border.dash.len,
+					self.border.dash_offset)
 			end
 			cr:stroke()
-		else --fill-based terra (requires path offsetting; supports patterns)
+		else --fill-based drawing (requires path offsetting; supports patterns)
 			cr:fill_rule(CAIRO_FILL_RULE_EVEN_ODD)
 			self:border_path(cr, -1, 0)
 			self:border_path(cr,  1, 0)
@@ -1271,15 +1281,12 @@ end
 
 terra Layer:sync_text_wrap()
 	if self.text.wrapped then return end
-	print'wrapping'
 	self.text.layout:wrap(self.cw)
 	self.text.wrapped = true
 end
 
 terra Layer:sync_text_align()
-	print'aligning'
 	self.text.layout:align(0, 0, self.cw, self.ch, self.text.align_x, self.text.align_y)
-	print'aligned'
 	if self.text.selectable then
 		self.text.selection:init(&self.text.layout)
 	end
@@ -1379,19 +1386,19 @@ terra Layer.methods.bbox :: {&Layer, bool} -> {num, num, num, num}
 terra Layer:bbox(strict: bool) --in parent's content space
 	var bb = rect{0, 0, 0, 0}
 	if self.visible then
-		if strict or self.clip == CLIP_NONE then
+		if strict or self.clip_content == CLIP_NONE then
 			var cbb = rect(self:content_bbox(strict))
 			inc(cbb.x, self.cx)
 			inc(cbb.y, self.cy)
-			if self.clip ~= CLIP_NONE then
+			if self.clip_content ~= CLIP_NONE then
 				cbb:intersect(rect(self:background_rect(0)))
-				if self.clip == CLIP_PADDING then
+				if self.clip_content == CLIP_PADDING then
 					cbb:intersect(rect(self:padding_rect()))
 				end
 			end
 			bb:bbox(cbb)
 		end
-		if (not strict and self.clip ~= CLIP_NONE)
+		if (not strict and self.clip_content ~= CLIP_NONE)
 			or self.background.hittable
 			or self:background_visible()
 		then
@@ -1476,12 +1483,12 @@ terra Layer:draw(cr: &context) --called in parent's content space
 		cr:restore()
 	end
 
-	if self.clip ~= CLIP_NONE then
+	if self.clip_content ~= CLIP_NONE then
 		cr:save()
 		cr:new_path()
 		self:background_path(cr, 0)
 		cr:clip()
-		if self.clip == CLIP_PADDING then
+		if self.clip_content == CLIP_PADDING then
 			cr:new_path()
 			cr:rectangle(self.px, self.py, self.cw, self.ch)
 			cr:clip()
@@ -1494,7 +1501,7 @@ terra Layer:draw(cr: &context) --called in parent's content space
 	cr:matrix(&cm)
 	self:draw_outset_content_shadows(cr)
 
-	if self.clip == CLIP_NONE then
+	if self.clip_content == CLIP_NONE then
 		cr:matrix(&bm)
 		self:draw_border(cr)
 	end
@@ -1503,7 +1510,7 @@ terra Layer:draw(cr: &context) --called in parent's content space
 	self:draw_content(cr)
 	self:draw_inset_content_shadows(cr)
 
-	if self.clip ~= CLIP_NONE then
+	if self.clip_content ~= CLIP_NONE then
 		cr:restore()
 		self:draw_border(cr)
 	end
@@ -2890,7 +2897,6 @@ end
 --lib ------------------------------------------------------------------------
 
 terra Lib:init(load_font: tr.FontLoadFunc, unload_font: tr.FontLoadFunc)
-	self.top_layers:init()
 	self.text_renderer:init(load_font, unload_font)
 	self.grid_occupied:init()
 	self.default_layout_solver = &null_layout
@@ -2900,7 +2906,6 @@ terra Lib:init(load_font: tr.FontLoadFunc, unload_font: tr.FontLoadFunc)
 end
 
 terra Lib:free()
-	self.top_layers:free()
 	self.text_renderer:free()
 	self.grid_occupied:free()
 end
@@ -2948,19 +2953,19 @@ end
 
 do end --drawing
 
-terra Layer:get_visible  () return self.visible end
-terra Layer:get_operator () return self.operator end
-terra Layer:get_clip     () return self.clip end
-terra Layer:get_snap_x   () return self.snap_x end
-terra Layer:get_snap_y   () return self.snap_y end
-terra Layer:get_opacity  () return self.opacity end
+terra Layer:get_visible      () return self.visible end
+terra Layer:get_operator     () return self.operator end
+terra Layer:get_clip_content () return self.clip_content end
+terra Layer:get_snap_x       () return self.snap_x end
+terra Layer:get_snap_y       () return self.snap_y end
+terra Layer:get_opacity      () return self.opacity end
 
-terra Layer:set_visible  (v: bool) self.visible = v end
-terra Layer:set_operator (v: enum) self.operator = v end
-terra Layer:set_clip     (v: enum) self.clip = v end
-terra Layer:set_snap_x   (v: bool) self.snap_x = v end
-terra Layer:set_snap_y   (v: bool) self.snap_y = v end
-terra Layer:set_opacity  (v: num)  self.opacity = v end
+terra Layer:set_visible      (v: bool) self.visible = v end
+terra Layer:set_operator     (v: enum) self.operator = v end
+terra Layer:set_clip_content (v: enum) self.clip_content = v end
+terra Layer:set_snap_x       (v: bool) self.snap_x = v end
+terra Layer:set_snap_y       (v: bool) self.snap_y = v end
+terra Layer:set_opacity      (v: num)  self.opacity = v end
 
 do end --transforms
 
@@ -3544,8 +3549,8 @@ function build()
 		get_operator=1,
 		set_operator=1,
 
-		get_clip=1,
-		set_clip=1,
+		get_clip_content=1,
+		set_clip_content=1,
 
 		get_snap_x=1,
 		get_snap_y=1,

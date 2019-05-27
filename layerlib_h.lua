@@ -75,13 +75,13 @@ int8_t Layer_get_layout_type(Layer*);
 void Layer_set_layout_type(Layer*, int8_t);
 bool Layer_get_visible(Layer*);
 int8_t Layer_get_operator(Layer*);
-int8_t Layer_get_clip(Layer*);
+int8_t Layer_get_clip_content(Layer*);
 bool Layer_get_snap_x(Layer*);
 bool Layer_get_snap_y(Layer*);
 double Layer_get_opacity(Layer*);
 void Layer_set_visible(Layer*, bool);
 void Layer_set_operator(Layer*, int8_t);
-void Layer_set_clip(Layer*, int8_t);
+void Layer_set_clip_content(Layer*, int8_t);
 void Layer_set_snap_x(Layer*, bool);
 void Layer_set_snap_y(Layer*, bool);
 void Layer_set_opacity(Layer*, double);
@@ -348,7 +348,7 @@ local getters = {
 	layout_type = C.Layer_get_layout_type,
 	visible = C.Layer_get_visible,
 	operator = C.Layer_get_operator,
-	clip = C.Layer_get_clip,
+	clip_content = C.Layer_get_clip_content,
 	snap_x = C.Layer_get_snap_x,
 	snap_y = C.Layer_get_snap_y,
 	opacity = C.Layer_get_opacity,
@@ -448,7 +448,7 @@ local setters = {
 	layout_type = C.Layer_set_layout_type,
 	visible = C.Layer_set_visible,
 	operator = C.Layer_set_operator,
-	clip = C.Layer_set_clip,
+	clip_content = C.Layer_set_clip_content,
 	snap_x = C.Layer_set_snap_x,
 	snap_y = C.Layer_set_snap_y,
 	opacity = C.Layer_set_opacity,
@@ -645,7 +645,7 @@ enum {
 	BACKGROUND_NONE = 0,
 	BACKGROUND_PATTERN = 8,
 	BACKGROUND_RADIAL_GRADIENT = 13,
-	CLIP_BG = 2,
+	CLIP_BACKGROUND = 2,
 	CLIP_NONE = 0,
 	CLIP_PADDING = 1,
 	DIR_AUTO = 64,

@@ -39,8 +39,8 @@ local font2_id = llib:font()
 local e = llib:layer(nil)
 local e1, e2 = e:child(0), e:child(1)
 
-e.clip = ll.CLIP_PADDING
---e.clip = ll.CLIP_NONE
+e.clip_content = ll.CLIP_PADDING
+--e.clip_content = ll.CLIP_NONE
 
 e.padding_left   = 50
 e.padding_top    = 50
@@ -63,16 +63,16 @@ e.padding = 20
 e.border_width = 10
 e.border_color = 0xff0000ff
 
-e.bg_type = ll.BG_COLOR
-e.bg_color = 0x00336699 --0x336699ff
+e.background_type = ll.BACKGROUND_COLOR
+e.background_color = 0x00336699 --0x336699ff
 
---e.bg_type = ll.BG_LINEAR_GRADIENT
-e.bg_y2 = 100
-e:set_bg_color_stop_offset(0, 0)
-e:set_bg_color_stop_offset(1, 1)
-e:set_bg_color_stop_color(0, 0xff0000ff)
-e:set_bg_color_stop_color(1, 0x0000ffff)
-e.bg_x1 = 1
+--e.background_type = ll.background_LINEAR_GRADIENT
+e.background_y2 = 100
+e:set_background_color_stop_offset(0, 0)
+e:set_background_color_stop_offset(1, 1)
+e:set_background_color_stop_color(0, 0xff0000ff)
+e:set_background_color_stop_color(1, 0x0000ffff)
+e.background_x1 = 1
 
 e:set_shadow_x       (0, 6)
 e:set_shadow_y       (0, 6)
@@ -91,11 +91,11 @@ e:set_shadow_inset   (1, false)
 e.layout_type = ll.LAYOUT_FLEX
 --e.flex_flow = ll.FLEX_FLOW_Y
 
-e1.clip = ll.CLIP_BG
-e2.clip = ll.CLIP_PADDING
+e1.clip_content = ll.CLIP_BACKGROUND
+e2.clip_content = ll.CLIP_PADDING
 
-e2.bg_type = ll.BG_COLOR
-e2.bg_color = 0x33333366
+e2.background_type = ll.BACKGROUND_COLOR
+e2.background_color = 0x33333366
 
 e1.border_width = 10; e1.padding = 20
 e2.border_width = 10; e2.padding = 20
@@ -173,6 +173,10 @@ function win:keyup(key)
 end
 
 app:run()
+
+e:free()
+e1:free()
+e2:free()
 
 llib:dump_stats()
 llib:free()
