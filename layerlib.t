@@ -1,3 +1,22 @@
+--[[
+
+	HTML-like box-model layouting and rendering engine with a C API.
+	Written by Cosmin Apreutesei. Public Domain.
+
+	How his box model works (and how it differs from the web's box model):
+
+	* the "layer box" is defined by (x, y, w, h).
+	* padding offsets are applied to the layer box, creating the "content box".
+	* child layers are positioned relative to the content box.
+	* child layers can be clipped to the content box or to the layer box,
+	  subject to `clip_content`.
+	* border can be inside or outside the layer box, subject to `border_offset`.
+	* border and padding are independent as both are relative to the layer box
+	  so to make room for an inner border, you need to add some padding.
+	* background can be clipped to the inside or outside of the border outline,
+	  subject to `background_clip_border_offset`.
+
+]]
 
 setfenv(1, require'low'.module())
 require'memcheck'
@@ -2949,7 +2968,7 @@ terra Lib:dump_stats()
 	pfn('GlyphRun cache count : %d', self.text_renderer.glyph_runs.count)
 end
 
---ffi ------------------------------------------------------------------------
+--C API ----------------------------------------------------------------------
 
 do end --drawing
 
