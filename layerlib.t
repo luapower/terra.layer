@@ -84,6 +84,12 @@ end
 map_enum(C, 'CAIRO_OPERATOR_', 'OPERATOR_')
 map_enum(tr, 'DIR_', 'DIR_')
 
+--overridable constants ------------------------------------------------------
+
+DEFAULT_BORDER_COLOR = DEFAULT_BORDER_COLOR or `color {0xffffffff}
+DEFAULT_SHADOW_COLOR = DEFAULT_SHADOW_COLOR or `color {0x000000ff}
+DEFAULT_CARET_COLOR  = DEFAULT_CARET_COLOR  or `color {0x000000ff}
+
 --bool bitmap ----------------------------------------------------------------
 
 struct BoolBitmap {
@@ -164,6 +170,10 @@ struct Border (gettersandsetters) {
 }
 
 terra Border:init()
+	self.color_left   = DEFAULT_BORDER_COLOR
+	self.color_right  = DEFAULT_BORDER_COLOR
+	self.color_top    = DEFAULT_BORDER_COLOR
+	self.color_bottom = DEFAULT_BORDER_COLOR
 	self.corner_radius_kappa = 1.2
 	self.offset = -1 --inner border
 end
@@ -280,7 +290,7 @@ struct Shadow (gettersandsetters) {
 terra Shadow:init(layer: &Layer)
 	fill(self)
 	self.layer = layer
-	self.color = 0x000000ff
+	self.color = DEFAULT_SHADOW_COLOR
 	self.blur_passes = 3
 	self.blur:init(BITMAP_G8)
 end
@@ -338,7 +348,7 @@ terra Text:init(r: &tr.Renderer)
 	self.shaped = true
 	self.wrapped = true
 	self.caret_width = 1
-	self.caret_color.uint = 0x000000ff
+	self.caret_color = DEFAULT_CARET_COLOR
 	self.selectable = true
 end
 
@@ -2051,7 +2061,7 @@ local function gen_funcs(X, Y, W, H)
 					return i, j
 				end
 				if layer.break_after then
-					return i, j-1
+					return i, j+1
 				end
 				var item_w = layer.[_MIN_W]
 				if line_w + item_w > wrap_w then
@@ -2067,9 +2077,9 @@ local function gen_funcs(X, Y, W, H)
 	linewrap.metamethods.__for = function(self, body)
 		return quote
 			var i = -1
-			var j = -1
+			var j = 0
 			while true do
-				i, j = linewrap_next(self.layer, j)
+				i, j = linewrap_next(self.layer, j-1)
 				if j == -1 then break end
 				[ body(i, j) ]
 			end
@@ -2920,7 +2930,6 @@ terra Lib:init(load_font: tr.FontLoadFunc, unload_font: tr.FontLoadFunc)
 	self.grid_occupied:init()
 	self.default_layout_solver = &null_layout
 	self.default_text_span:init()
-	self.default_text_span.color = 0xffffffff
 	self.default_shadow:init(nil)
 end
 
@@ -3379,11 +3388,11 @@ terra Layer:set_align_items_y (v: enum) self.align_items_y = v end
 terra Layer:set_item_align_x  (v: enum) self.item_align_x  = v end
 terra Layer:set_item_align_y  (v: enum) self.item_align_y  = v end
 
-terra Layer:get_flex_flow() return iif(self.layout_type == LAYOUT_FLEX, self.flex.flow, 0) end
-terra Layer:set_flex_flow(v: enum) if self.layout_type == LAYOUT_FLEX then self.flex.flow = v end end
+terra Layer:get_flex_flow() return self.flex.flow end
+terra Layer:set_flex_flow(v: enum) self.flex.flow = v end
 
-terra Layer:get_flex_wrap() return iif(self.layout_type == LAYOUT_FLEX, self.flex.wrap, false) end
-terra Layer:set_flex_wrap(v: bool) if self.layout_type == LAYOUT_FLEX then self.flex.wrap = v end end
+terra Layer:get_flex_wrap() return self.flex.wrap end
+terra Layer:set_flex_wrap(v: bool) self.flex.wrap = v end
 
 terra Layer:get_fr() return self.fr end
 terra Layer:set_fr(v: num) self.fr = v end
@@ -3394,29 +3403,29 @@ terra Layer:get_break_after  () return self.break_after  end
 terra Layer:set_break_before (v: bool) self.break_before = v end
 terra Layer:set_break_after  (v: bool) self.break_after  = v end
 
-terra Layer:get_grid_col_fr_count() return iif(self.layout_type == LAYOUT_GRID, self.grid.col_frs.len, 0) end
-terra Layer:get_grid_row_fr_count() return iif(self.layout_type == LAYOUT_GRID, self.grid.row_frs.len, 0) end
+terra Layer:get_grid_col_fr_count() return self.grid.col_frs.len end
+terra Layer:get_grid_row_fr_count() return self.grid.row_frs.len end
 
-terra Layer:set_grid_col_fr_count(n: int) if self.layout_type == LAYOUT_GRID then self.grid.col_frs:setlen(n, 0) end end
-terra Layer:set_grid_row_fr_count(n: int) if self.layout_type == LAYOUT_GRID then self.grid.row_frs:setlen(n, 0) end end
+terra Layer:set_grid_col_fr_count(n: int) self.grid.col_frs:setlen(n, 0) end
+terra Layer:set_grid_row_fr_count(n: int) self.grid.row_frs:setlen(n, 0) end
 
-terra Layer:get_grid_col_fr(i: int) return iif(self.layout_type == LAYOUT_GRID, self.grid.col_frs(i, 0), 0) end
-terra Layer:get_grid_row_fr(i: int) return iif(self.layout_type == LAYOUT_GRID, self.grid.row_frs(i, 0), 0) end
+terra Layer:get_grid_col_fr(i: int) return self.grid.col_frs(i, 0) end
+terra Layer:get_grid_row_fr(i: int) return self.grid.row_frs(i, 0) end
 
-terra Layer:set_grid_col_fr(i: int, v: num) if self.layout_type == LAYOUT_GRID then self.grid.col_frs:set(i, v, 0) end end
-terra Layer:set_grid_row_fr(i: int, v: num) if self.layout_type == LAYOUT_GRID then self.grid.row_frs:set(i, v, 0) end end
+terra Layer:set_grid_col_fr(i: int, v: num) self.grid.col_frs:set(i, v, 0) end
+terra Layer:set_grid_row_fr(i: int, v: num) self.grid.row_frs:set(i, v, 0) end
 
-terra Layer:get_grid_col_gap() return iif(self.layout_type == LAYOUT_GRID, self.grid.col_gap, 0) end
-terra Layer:get_grid_row_gap() return iif(self.layout_type == LAYOUT_GRID, self.grid.row_gap, 0) end
+terra Layer:get_grid_col_gap() return self.grid.col_gap end
+terra Layer:get_grid_row_gap() return self.grid.row_gap end
 
-terra Layer:set_grid_col_gap(v: num) if self.layout_type == LAYOUT_GRID then self.grid.col_gap = v end end
-terra Layer:set_grid_row_gap(v: num) if self.layout_type == LAYOUT_GRID then self.grid.row_gap = v end end
+terra Layer:set_grid_col_gap(v: num) self.grid.col_gap = v end
+terra Layer:set_grid_row_gap(v: num) self.grid.row_gap = v end
 
-terra Layer:get_grid_flow() return iif(self.layout_type == LAYOUT_GRID, self.grid.flow, 0) end
-terra Layer:set_grid_flow(v: enum) if self.layout_type == LAYOUT_GRID then self.grid.flow = v end end
+terra Layer:get_grid_flow() return self.grid.flow end
+terra Layer:set_grid_flow(v: enum) self.grid.flow = v end
 
-terra Layer:get_grid_wrap() return iif(self.layout_type == LAYOUT_GRID, self.grid.wrap, 0) end
-terra Layer:set_grid_wrap(v: int) if self.layout_type == LAYOUT_GRID then self.grid.wrap = v end end
+terra Layer:get_grid_wrap() return self.grid.wrap end
+terra Layer:set_grid_wrap(v: int) self.grid.wrap = v end
 
 terra Layer:get_min_cw() return self.min_cw end
 terra Layer:get_min_ch() return self.min_cw end
