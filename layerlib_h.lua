@@ -69,7 +69,7 @@ double2 Layer_from_window(Layer*, double, double);
 double2 Layer_to_content(Layer*, double, double);
 double2 Layer_from_content(Layer*, double, double);
 void Layer_draw(Layer*, _cairo*);
-void Layer_sync(Layer*, double, double);
+void Layer_sync_top(Layer*, double, double);
 void Layer_sync_layout_separate_axes(Layer*, int8_t, double, double);
 int8_t Layer_get_layout_type(Layer*);
 void Layer_set_layout_type(Layer*, int8_t);
@@ -542,7 +542,7 @@ local methods = {
 	to_content = C.Layer_to_content,
 	from_content = C.Layer_from_content,
 	draw = C.Layer_draw,
-	sync = C.Layer_sync,
+	sync_top = C.Layer_sync_top,
 	sync_layout_separate_axes = C.Layer_sync_layout_separate_axes,
 	get_border_dash = C.Layer_get_border_dash,
 	set_border_dash = C.Layer_set_border_dash,

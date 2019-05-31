@@ -361,7 +361,6 @@ end
 struct LayoutSolver {
 	type       : enum; --LAYOUT_*
 	axis_order : enum; --AXIS_ORDER_*
-	init       : {&Layer} -> {};
 	sync       : {&Layer} -> {};
 	sync_min_w : {&Layer, bool} -> num;
 	sync_min_h : {&Layer, bool} -> num;
@@ -526,6 +525,9 @@ terra Layer:init(lib: &Lib, parent: &Layer)
  	self.item_align_x  = ALIGN_STRETCH
 	self.item_align_y  = ALIGN_STRETCH
 	self.fr = 1
+
+	self.grid_col_span = 1
+	self.grid_row_span = 1
 
 	self:init_layout()
 end
@@ -816,7 +818,7 @@ end
 
 --corner radius at pixel offset from the stroke's center on one dimension.
 local terra offset_radius(r: num, o: num)
-	return iif(r > 0, max(.0, r + o), .0)
+	return iif(r > 0, max(0.0, r + o), 0.0)
 end
 
 --border rect at %-offset in border width, plus radii of rounded corners.
@@ -1335,7 +1337,7 @@ end
 
 terra Layer:text_bbox()
 	if not self:text_visible() then
-		return .0, .0, .0, .0
+		return 0.0, 0.0, 0.0, 0.0
 	end
 	return self.text.layout:bbox() --float->double conversion!
 end
@@ -1575,8 +1577,7 @@ terra Layer:sync_min_w(b: bool)    return self.layout_solver.sync_min_w(self, b)
 terra Layer:sync_min_h(b: bool)    return self.layout_solver.sync_min_h(self, b) end
 terra Layer:sync_layout_x(b: bool) return self.layout_solver.sync_x(self, b) end
 terra Layer:sync_layout_y(b: bool) return self.layout_solver.sync_y(self, b) end
-
-terra Layer:sync(w: num, h: num)
+terra Layer:sync_top(w: num, h: num)
 	if self.layout_solver.sync_top(self, w, h) then
 		self:sync_layout()
 	end
@@ -1688,7 +1689,6 @@ end
 null_layout = constant(`LayoutSolver {
 	type       = LAYOUT_NULL;
 	axis_order = 0;
-	init       = nil;
 	sync       = null_sync;
 	sync_min_w = null_sync_min_w;
 	sync_min_h = null_sync_min_h;
@@ -1762,7 +1762,6 @@ end
 text_layout = constant(`LayoutSolver {
 	type       = LAYOUT_TEXT;
 	axis_order = 0;
-	init       = nil;
 	sync       = text_sync;
 	sync_min_w = text_sync_min_w;
 	sync_min_h = text_sync_min_h;
@@ -1819,25 +1818,25 @@ local function stretch_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 		--, set_item_x, set_moving_item_x
 	)
 		--compute the fraction representing the total width.
-		var total_fr: num = .0
+		var total_fr: num = 0.0
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
-				total_fr = total_fr + max(.0, item.fr)
+				total_fr = total_fr + max(0.0, item.fr)
 			end
 		end
 		total_fr = max(1.0, total_fr) --treat sub-unit fractions like css flex
 
 		--compute the total overflow width and total free width.
-		var total_overflow_w: num = .0
-		var total_free_w: num = .0
+		var total_overflow_w: num = 0.0
+		var total_free_w: num = 0.0
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
 				var min_w = item.[_MIN_W]
-				var flex_w = total_w * max(.0, item.fr) / total_fr
-				var overflow_w = max(.0, min_w - flex_w)
-				var free_w = max(.0, flex_w - min_w)
+				var flex_w = total_w * max(0.0, item.fr) / total_fr
+				var overflow_w = max(0.0, min_w - flex_w)
+				var free_w = max(0.0, flex_w - min_w)
 				total_overflow_w = total_overflow_w + overflow_w
 				total_free_w = total_free_w + free_w
 			end
@@ -1865,7 +1864,7 @@ local function stretch_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 		--distribute the overflow to children which have free space to
 		--take it. each child shrinks to take in a part of the overflow
 		--proportional to its percent of free space.
-		var sx: num = .0 --stretched x-coord
+		var sx: num = 0.0 --stretched x-coord
 		for i = i, j do
 			var item = self:[GET_ITEM](i)
 			if item.inlayout then
@@ -1994,7 +1993,7 @@ local function gen_funcs(X, Y, W, H)
 	local ALIGN_Y = 'align_'..Y
 
 	local terra items_sum_x(self: &Layer, i: int, j: int)
-		var sum_w: num = .0
+		var sum_w: num = 0.0
 		var item_count = 0
 		for i = i, j do
 			var item = self.children(i)
@@ -2007,7 +2006,7 @@ local function gen_funcs(X, Y, W, H)
 	end
 
 	local terra items_max_x(self: &Layer, i: int, j: int)
-		var max_w: num = .0
+		var max_w: num = 0.0
 		var item_count = 0
 		for i = i, j do
 			var item = self.children(i)
@@ -2053,7 +2052,7 @@ local function gen_funcs(X, Y, W, H)
 			return i, self.children.len
 		end
 		var wrap_w = self.[CW]
-		var line_w: num = .0
+		var line_w: num = 0.0
 		for j = i, self.children.len do
 			var layer = self.children(j)
 			if layer.visible then
@@ -2104,7 +2103,7 @@ local function gen_funcs(X, Y, W, H)
 			--wrapping flex (which is a height-in-width-out layout).
 			return 0
 		end
-		var lines_h: num = .0
+		var lines_h: num = 0.0
 		for i, j in linewrap{self} do
 			var line_h, _ = items_min_h(self, i, j, align_baseline)
 			lines_h = lines_h + line_h
@@ -2235,7 +2234,7 @@ local function gen_funcs(X, Y, W, H)
 		elseif align == ALIGN_TOP or align == ALIGN_START then
 			lines_y, line_spacing = 0, 0
 		else
-			var lines_h: num = .0
+			var lines_h: num = 0.0
 			var line_count: int = 0
 			for i, j in linewrap{self} do
 				var line_h, _ = items_min_h(self, i, j, align_baseline)
@@ -2403,12 +2402,16 @@ end
 
 --bitmap-of-bools object -----------------------------------------------------
 
+terra BoolBitmap:bitindex(row: int, col: int)
+	return (row - 1) * self.cols + col - 1
+end
+
 terra BoolBitmap:set(row: int, col: int, val: bool)
-	self.bits:set((row - 1) * self.cols + col - 1, val, false)
+	self.bits:set(self:bitindex(row, col), val, false)
 end
 
 terra BoolBitmap:get(row: int, col: int)
-	return self.bits((row - 1) * self.cols + col, false)
+	return self.bits(self:bitindex(row, col), false)
 end
 
 terra BoolBitmap:widen(min_rows: int, min_cols: int)
@@ -2461,6 +2464,8 @@ end
 
 --grid layout ----------------------------------------------------------------
 
+--NOTE: row and column numbering starts from 1, but the arrays are 0-indexed.
+
 --these flags can be combined: X|Y + L|R + T|B
 GRID_FLOW_X = 0; GRID_FLOW_Y = 2 --main axis
 GRID_FLOW_L = 0; GRID_FLOW_R = 4 --horizontal direction
@@ -2502,7 +2507,7 @@ terra Layer:sync_layout_grid_autopos()
 	var max_col = iif(col_first, grid_wrap, self.grid.min_lines)
 	var max_row = iif(row_first, grid_wrap, self.grid.min_lines)
 
-	var occupied = self.lib.grid_occupied
+	var occupied = &self.lib.grid_occupied
 	occupied:clear()
 
 	--position explicitly-positioned layers first and mark occupied cells.
@@ -2517,8 +2522,6 @@ terra Layer:sync_layout_grid_autopos()
 			var col_span = max(1, layer.grid_col_span)
 
 			if row ~= 0 or col ~= 0 then --explicit position
-				row = max(1, row)
-				col = max(1, col)
 				if row > 0 and col > 0 then
 					row, col, row_span, col_span =
 						clip_span(row, col, row_span, col_span, maxint, maxint)
@@ -2689,6 +2692,10 @@ local function gen_funcs(X, Y, W, H, COL)
 
 	local terra sync_min_w(self: &Layer, other_axis_synced: bool)
 
+		if not other_axis_synced then
+			self:sync_layout_grid_autopos()
+		end
+
 		--sync all children first (bottom-up sync).
 		for layer in self do
 			if layer.visible then
@@ -2698,28 +2705,28 @@ local function gen_funcs(X, Y, W, H, COL)
 
 		var gap_w = self.grid.[COL_GAP]
 		var max_col = self.grid.[_MAX_COL]
-		var fr = self.grid.[COL_FRS] --{fr1, ...}
+		var frs = &self.grid.[COL_FRS] --{fr1, ...}
 
 		--compute the fraction representing the total width.
-		var total_fr: num = .0
+		var total_fr: num = 0.0
 		for layer in self do
 			if layer.inlayout then
 				var col1 = layer.[_COL]
 				var col2 = col1 + layer.[_COL_SPAN]
 				for col = col1, col2 do
-					total_fr = total_fr + fr:get(col, 1)
+					total_fr = total_fr + frs(col-1, 1)
 				end
 			end
 		end
 
 		--create pseudo-layers to apply flex stretching to.
-		var cols = self.grid.[_COLS]
+		var cols = &self.grid.[_COLS]
 		cols.len = max_col
 
 		for col = 0, max_col do
 			cols:set(col, GridLayoutCol{
 				inlayout = true,
-				fr = fr(col),
+				fr = frs(col, 1),
 				_min_w = 0,
 				x = 0,
 				w = 0,
@@ -2753,27 +2760,27 @@ local function gen_funcs(X, Y, W, H, COL)
 				end
 
 				if col1 == col2 then
-					var item = cols:at(col1)
+					var item = cols:at(col1-1)
 					var col_min_w = span_min_w + gap_col1 + gap_col2
 					item._min_w = max(item._min_w, col_min_w)
 				else --merged columns: unmerge
-					var span_fr: num = .0
+					var span_fr: num = 0.0
 					for col = col1, col2 do
-						span_fr = span_fr + fr(col, 1)
+						span_fr = span_fr + frs(col-1, 1)
 					end
 					for col = col1, col2 do
-						var item = cols:at(col)
+						var item = cols:at(col-1)
 						var col_min_w =
-							fr(col, 1) / span_fr * span_min_w
-							+ iif(col == col1, gap_col1, .0)
-							+ iif(col == col2, gap_col2, .0)
+							frs(col-1, 1) / span_fr * span_min_w
+							+ iif(col == col1, gap_col1, 0.0)
+							+ iif(col == col2, gap_col2, 0.0)
 						item._min_w = max(item._min_w, col_min_w)
 					end
 				end
 			end
 		end
 
-		var min_cw: num = .0
+		var min_cw: num = 0.0
 		for _,item in cols do
 			min_cw = min_cw + item._min_w
 		end
@@ -2797,8 +2804,8 @@ local function gen_funcs(X, Y, W, H, COL)
 	end
 	]]
 
-	local terra sum_min_w(cols: arr(GridLayoutCol))
-		var w: num = .0
+	local terra sum_min_w(cols: &arr(GridLayoutCol))
+		var w: num = 0.0
 		for _,col in cols do
 			w = w + col._min_w
 		end
@@ -2807,7 +2814,7 @@ local function gen_funcs(X, Y, W, H, COL)
 
 	local terra sync_x(self: &Layer, other_axis_synced: bool)
 
-		var cols = self.grid.[_COLS]
+		var cols = &self.grid.[_COLS]
 		var gap_w = self.grid.[COL_GAP]
 		var container_w = self.[CW]
 		var align_items_x = self.[ALIGN_ITEMS_X]
@@ -2821,7 +2828,7 @@ local function gen_funcs(X, Y, W, H, COL)
 
 		if align_items_x == ALIGN_STRETCH then
 			stretch_cols_main_axis(
-				&cols, 0, cols.len, container_w, ALIGN_STRETCH, false)
+				cols, 0, cols.len, container_w, ALIGN_STRETCH, false)
 				--set_item_x, set_moving_item_x,
 				--X, W, ALIGN_END, ALIGN_RIGHT)
 		else
@@ -2833,23 +2840,23 @@ local function gen_funcs(X, Y, W, H, COL)
 				var items_count = cols.len
 				sx, spacing = align_metrics(align_items_x, self.[CW], items_w, items_count)
 			end
-			align_cols_main_axis(&cols, 0, cols.len, sx, spacing, false)
+			align_cols_main_axis(cols, 0, cols.len, sx, spacing, false)
 				--TODO: set_item_x, set_moving_item_x
 		end
 
-		var x: num = .0
+		var x: num = 0.0
 		for layer in self do
 			if layer.inlayout then
 
 				var col1 = layer.[_COL]
 				var col2 = col1 + layer.[_COL_SPAN] - 1
-				var col_item1 = cols:at(col1)
-				var col_item2 = cols:at(col2)
+				var col_item1 = cols:at(col1-1)
+				var col_item2 = cols:at(col2-1)
 				var x1 = col_item1.x
 				var x2 = col_item2.x + col_item2.w
 
-				var gap1: num = iif(col1 ~= 1,        gap_w * .5, .0)
-				var gap2: num = iif(col2 ~= cols.len, gap_w * .5, .0)
+				var gap1 = iif(col1 ~= 1,        gap_w * 0.5, 0.0)
+				var gap2 = iif(col2 ~= cols.len, gap_w * 0.5, 0.0)
 				x1 = x1 + gap1
 				x2 = x2 - gap2
 
@@ -2885,7 +2892,6 @@ local grid_sync_min_w, grid_sync_x = gen_funcs('x', 'y', 'w', 'h', 'col', ALIGN_
 local grid_sync_min_h, grid_sync_y = gen_funcs('y', 'x', 'h', 'w', 'row', ALIGN_TOP, ALIGN_BOTTOM)
 
 local terra grid_sync(self: &Layer)
-	self:sync_layout_grid_autopos()
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
@@ -2914,9 +2920,6 @@ terra Layer:get_layout_type() return self.layout_solver.type end
 
 terra Layer:set_layout_type(type: enum)
 	self.layout_solver = &layouts[type]
-	if self.layout_solver.init ~= nil then
-		self.layout_solver.init(self)
-	end
 end
 
 terra Layer:init_layout()
@@ -3409,11 +3412,11 @@ terra Layer:get_grid_row_fr_count() return self.grid.row_frs.len end
 terra Layer:set_grid_col_fr_count(n: int) self.grid.col_frs:setlen(n, 0) end
 terra Layer:set_grid_row_fr_count(n: int) self.grid.row_frs:setlen(n, 0) end
 
-terra Layer:get_grid_col_fr(i: int) return self.grid.col_frs(i, 0) end
-terra Layer:get_grid_row_fr(i: int) return self.grid.row_frs(i, 0) end
+terra Layer:get_grid_col_fr(i: int) return self.grid.col_frs(i-1, 0) end
+terra Layer:get_grid_row_fr(i: int) return self.grid.row_frs(i-1, 0) end
 
-terra Layer:set_grid_col_fr(i: int, v: num) self.grid.col_frs:set(i, v, 0) end
-terra Layer:set_grid_row_fr(i: int, v: num) self.grid.row_frs:set(i, v, 0) end
+terra Layer:set_grid_col_fr(i: int, v: num) self.grid.col_frs:set(i-1, v, 0) end
+terra Layer:set_grid_row_fr(i: int, v: num) self.grid.row_frs:set(i-1, v, 0) end
 
 terra Layer:get_grid_col_gap() return self.grid.col_gap end
 terra Layer:get_grid_row_gap() return self.grid.row_gap end
@@ -3846,7 +3849,7 @@ function build()
 
 		--drawing & sync
 
-		sync=1,
+		sync_top=1,
 		sync_layout_separate_axes=1, --for scrollbox
 		draw=1,
 
