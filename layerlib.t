@@ -84,6 +84,12 @@ end
 map_enum(C, 'CAIRO_OPERATOR_', 'OPERATOR_')
 map_enum(tr, 'DIR_', 'DIR_')
 
+HIT_NONE           = 0
+HIT_BORDER         = 1
+HIT_BACKGROUND     = 2
+HIT_TEXT           = 3
+HIT_TEXT_SELECTION = 4
+
 --overridable constants ------------------------------------------------------
 
 DEFAULT_BORDER_COLOR = DEFAULT_BORDER_COLOR or `color {0xffffffff}
@@ -409,6 +415,11 @@ struct GridLayout {
 	_rows: arr(GridLayoutCol);
 }
 
+terra GridLayout:init()
+	self.wrap = 1
+	self.min_lines = 1
+end
+
 terra GridLayout:free()
 	self.col_frs:free()
 	self.row_frs:free()
@@ -466,7 +477,7 @@ struct Layer (gettersandsetters) {
 
 	layout_solver: &LayoutSolver;
 
-	--flex layouts
+	--flex & grid layout
 	align_items_x: enum;  --ALIGN_*
 	align_items_y: enum;  --ALIGN_*
  	item_align_x: enum;   --ALIGN_*
@@ -474,7 +485,7 @@ struct Layer (gettersandsetters) {
 	flex: FlexLayout;
 	grid: GridLayout;
 
-	--child of flex layouts
+	--child of flex & grid layout
 	_min_w: num;
 	_min_h: num;
 	min_cw: num; --min client width
@@ -497,6 +508,10 @@ struct Layer (gettersandsetters) {
 	_grid_row: int;
 	_grid_col_span: int;
 	_grid_row_span: int;
+
+	--hit testing -----------------
+
+	hit_test_mask: enum;
 }
 
 terra Layer.methods.free :: {&Layer} -> {}
@@ -526,6 +541,7 @@ terra Layer:init(lib: &Lib, parent: &Layer)
 	self.item_align_y  = ALIGN_STRETCH
 	self.fr = 1
 
+	self.grid:init()
 	self.grid_col_span = 1
 	self.grid_row_span = 1
 
@@ -1284,7 +1300,7 @@ terra Layer:draw_outset_box_shadows(cr: &context)
 	self:draw_shadows(cr, false, false)
 end
 
---text drawing ---------------------------------------------------------------
+--text drawing & hit testing -------------------------------------------------
 
 terra Layer:text_visible()
 	return self.text.layout.text.len > 0
@@ -1340,6 +1356,14 @@ terra Layer:text_bbox()
 		return 0.0, 0.0, 0.0, 0.0
 	end
 	return self.text.layout:bbox() --float->double conversion!
+end
+
+terra Layer:hit_test_text(cr: &context, x: num, y: num, reason: enum)
+	if not self:text_visible() then return HIT_NONE end
+	var line_i, line_hit = self.text.layout:hit_test(x, y)
+	if line_i >= 0 and line_i < self.text.layout.lines.len and line_hit == 0 then
+		return HIT_TEXT
+	end
 end
 
 --text caret & selection drawing ---------------------------------------------
@@ -1444,9 +1468,10 @@ terra Layer:bbox(strict: bool) --in parent's content space
 	return bb()
 end
 
---layer drawing --------------------------------------------------------------
+--children drawing & hit testing ---------------------------------------------
 
 terra Layer.methods.draw :: {&Layer, &context} -> {}
+terra Layer.methods.hit_test :: {&Layer, &context, num, num, enum} -> {&Layer, enum}
 
 terra Layer:draw_children(cr: &context) --called in own content space
 	for e in self do
@@ -1454,18 +1479,17 @@ terra Layer:draw_children(cr: &context) --called in own content space
 	end
 end
 
---[[
-function layer:hit_test_children(x, y, reason) --called in content space
-	for i = #self, 1, -1 do
-		local widget, area = self[i]:hit_test(x, y, reason)
-		if widget then
-			return widget, area
+terra Layer:hit_test_children(cr: &context, x: num, y: num, reason: enum) --called in content space
+	for i = self.children.len-1, -1, -1 do
+		var e, area = self.children(i):hit_test(cr, x, y, reason)
+		if area ~= HIT_NONE then
+			return e, area
 		end
 	end
+	return nil, HIT_NONE
 end
-]]
 
---content drawing & hit testing
+--content drawing & hit testing ----------------------------------------------
 
 terra Layer:draw_content(cr: &context) --called in own content space
 	self:draw_children(cr)
@@ -1474,18 +1498,16 @@ terra Layer:draw_content(cr: &context) --called in own content space
 	self:draw_caret(cr)
 end
 
---[[
-function Layer:hit_test_content(x, y, reason) --called in own content space
-	local widget, area = self:hit_test_text(x, y, reason)
-	if not widget then
-		return self:hit_test_children(x, y, reason)
+terra Layer:hit_test_content(cr: &context, x: num, y: num, reason: enum)
+	var area = self:hit_test_text(cr, x, y, reason)
+	if area ~= HIT_NONE then
+		return self, area
+	else
+		return self:hit_test_children(cr, x, y, reason)
 	end
-	return widget, area
 end
-]]
 
-local ft_lib = global(FT_Library, nil)
-local face = global(FT_Face, nil)
+--layer drawing & hit testing ------------------------------------------------
 
 terra Layer:draw(cr: &context) --called in parent's content space
 
@@ -1555,6 +1577,88 @@ terra Layer:draw(cr: &context) --called in parent's content space
 		cr:rgb(0, 0, 0) --release source
 	else
 		cr:restore()
+	end
+end
+
+--called in parent's content space; child interface.
+terra Layer:hit_test(cr: &context, x: num, y: num, reason: enum): {&Layer, enum}
+
+	if not self.visible or self.opacity <= 0 then
+		return nil, HIT_NONE
+	end
+
+	var self_allowed = (self.hit_test_mask and reason) ~= 0
+
+	var x, y = self:from_parent_to_box(x, y)
+	cr:save()
+	cr:identity_matrix()
+
+	--hit the content first if it's not clipped
+	if self.clip_content == CLIP_NONE then
+		var cx, cy = self:to_content(x, y)
+		var e, area = self:hit_test_content(cr, cx, cy, reason)
+		if e ~= nil then
+			cr:restore()
+			return e, area
+		end
+	end
+
+	--border is drawn last so hit it first
+	if self:border_visible() then
+		cr:new_path()
+		self:border_path(cr, 1, 0)
+		if cr:in_fill(x, y) then --inside border outer edge
+			cr:new_path()
+			self:border_path(cr, -1, 0)
+			if not cr:in_fill(x, y) then --outside border inner edge
+				cr:restore()
+				if self_allowed then
+					return self, HIT_BORDER
+				else
+					return nil, HIT_NONE
+				end
+			end
+		elseif self.clip_content ~= CLIP_NONE then --outside border outer edge when clipped
+			cr:restore()
+			return nil, HIT_NONE
+		end
+	end
+
+	--hit background's clip area
+	var in_bg = false
+	if self.clip_content ~= CLIP_NONE or self.background.hittable or self:background_visible() then
+		cr:new_path()
+		self:background_path(cr, 0)
+		in_bg = cr:in_fill(x, y)
+	end
+
+	--hit content's clip area
+	var in_cc = false
+	if self.clip_content ~= CLIP_NONE and in_bg then --CLIP_BACKGROUND is implicit here
+		if self.clip_content == CLIP_PADDING then
+			cr:new_path()
+			cr:rectangle(self.px, self.py, self.cw, self.ch)
+			if cr:in_fill(x, y) then
+				in_cc = true
+			end
+		else
+			in_cc = true
+		end
+	end
+
+	--hit the content if inside the clip area.
+	if in_cc then
+		var cx, cy = self:to_content(x, y)
+		var e, area = self:hit_test_content(cr, cx, cy, reason)
+		if e ~= nil then
+			cr:restore()
+			return e, area
+		end
+	end
+
+	--hit the background if any
+	if self_allowed and in_bg then
+		return self, HIT_BACKGROUND
 	end
 end
 
@@ -1803,7 +1907,7 @@ local function stretch_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 			var free_w = flex_w - min_w
 			var free_p = free_w / total_free_w
 			var shrink_w = total_overflow_w * free_p
-			if shrink_w ~= shrink_w then --total_free_w == 0
+			if isnan(shrink_w) then --total_free_w == 0
 				shrink_w = 0
 			end
 			sw = flex_w - shrink_w
@@ -1975,6 +2079,24 @@ end
 
 --flex layout ----------------------------------------------------------------
 
+local function items_max_w(_MIN_W)
+	return terra(self: &Layer, i: int, j: int)
+		var max_w: num = 0.0
+		var item_count = 0
+		for i = i, j do
+			var item = self.children(i)
+			if item.visible then
+				max_w = max(max_w, item.[_MIN_W])
+				item_count = item_count + 1
+			end
+		end
+		return max_w, item_count
+	end
+end
+
+items_max_x = items_max_w'_min_w'
+items_max_y = items_max_w'_min_h'
+
 --generate pairs of methods for vertical and horizontal flex layouts.
 local function gen_funcs(X, Y, W, H)
 
@@ -1992,6 +2114,9 @@ local function gen_funcs(X, Y, W, H)
 	local ALIGN_X = 'align_'..X --TODO: unused
 	local ALIGN_Y = 'align_'..Y
 
+	local items_max_x = X == 'x' and items_max_x or items_max_y
+	local items_max_y = X == 'x' and items_max_y or items_max_x
+
 	local terra items_sum_x(self: &Layer, i: int, j: int)
 		var sum_w: num = 0.0
 		var item_count = 0
@@ -2003,19 +2128,6 @@ local function gen_funcs(X, Y, W, H)
 			end
 		end
 		return sum_w, item_count
-	end
-
-	local terra items_max_x(self: &Layer, i: int, j: int)
-		var max_w: num = 0.0
-		var item_count = 0
-		for i = i, j do
-			var item = self.children(i)
-			if item.visible then
-				max_w = max(max_w, item.[_MIN_W])
-				item_count = item_count + 1
-			end
-		end
-		return max_w, item_count
 	end
 
 	local stretch_items_main_axis_x = stretch_items_main_axis_func(Layer, 'child', Layer, X, W)
@@ -2041,7 +2153,7 @@ local function gen_funcs(X, Y, W, H)
 		if align_baseline then
 			return items_min_h_baseline(self, i, j)
 		end
-		return items_max_x(self, i, j)
+		return items_max_y(self, i, j)
 	end
 
 	local terra linewrap_next(self: &Layer, i: int): {int, int}
@@ -2346,6 +2458,7 @@ local terra flex_sync_y(self: &Layer, other_axis_synced: bool)
 			end
 		end
 	end
+
 	return synced
 end
 
@@ -2503,15 +2616,17 @@ terra Layer:sync_layout_grid_autopos()
 	var row_first = not col_first
 	var flip_cols = (flow and GRID_FLOW_R) ~= 0
 	var flip_rows = (flow and GRID_FLOW_B) ~= 0
-	var grid_wrap = max(1, self.grid.wrap)
-	var max_col = iif(col_first, grid_wrap, self.grid.min_lines)
-	var max_row = iif(row_first, grid_wrap, self.grid.min_lines)
 
 	var occupied = &self.lib.grid_occupied
 	occupied:clear()
 
-	--position explicitly-positioned layers first and mark occupied cells.
-	--grow the grid bounds to include layers outside (grid.wrap, grid.min_lines).
+	var grid_wrap = max(1, self.grid.wrap)
+	var min_lines = max(1, self.grid.min_lines)
+	var max_col = iif(col_first, grid_wrap, min_lines)
+	var max_row = iif(row_first, grid_wrap, min_lines)
+
+	--position explicitly-positioned layers first, mark occupied cells
+	--and grow the grid bounds to include these layers fully.
 	var missing_indices = false
 	var negative_indices = false
 	for layer in self do
@@ -2522,6 +2637,8 @@ terra Layer:sync_layout_grid_autopos()
 			var col_span = max(1, layer.grid_col_span)
 
 			if row ~= 0 or col ~= 0 then --explicit position
+				row = iif(row == 0, 1, row)
+				col = iif(col == 0, 1, col)
 				if row > 0 and col > 0 then
 					row, col, row_span, col_span =
 						clip_span(row, col, row_span, col_span, maxint, maxint)
@@ -2730,6 +2847,7 @@ local function gen_funcs(X, Y, W, H, COL)
 				_min_w = 0,
 				x = 0,
 				w = 0,
+				align_x = 0,
 				snap_x = self.[SNAP_X],
 			})
 		end
@@ -2788,6 +2906,7 @@ local function gen_funcs(X, Y, W, H, COL)
 		min_cw = max(min_cw, self.[MIN_CW])
 		var min_w = min_cw + self.[PW]
 		self.[_MIN_W] = min_w
+
 		return min_w
 	end
 
@@ -2883,13 +3002,14 @@ local function gen_funcs(X, Y, W, H, COL)
 				layer:['sync_layout_'..X](other_axis_synced) --recurse
 			end
 		end
+
 		return true
 	end
 
 	return sync_min_w, sync_x
 end
-local grid_sync_min_w, grid_sync_x = gen_funcs('x', 'y', 'w', 'h', 'col', ALIGN_LEFT, ALIGN_RIGHT)
-local grid_sync_min_h, grid_sync_y = gen_funcs('y', 'x', 'h', 'w', 'row', ALIGN_TOP, ALIGN_BOTTOM)
+local grid_sync_min_w, grid_sync_x = gen_funcs('x', 'y', 'w', 'h', 'col')
+local grid_sync_min_h, grid_sync_y = gen_funcs('y', 'x', 'h', 'w', 'row')
 
 local terra grid_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
@@ -3409,14 +3529,14 @@ terra Layer:set_break_after  (v: bool) self.break_after  = v end
 terra Layer:get_grid_col_fr_count() return self.grid.col_frs.len end
 terra Layer:get_grid_row_fr_count() return self.grid.row_frs.len end
 
-terra Layer:set_grid_col_fr_count(n: int) self.grid.col_frs:setlen(n, 0) end
-terra Layer:set_grid_row_fr_count(n: int) self.grid.row_frs:setlen(n, 0) end
+terra Layer:set_grid_col_fr_count(n: int) self.grid.col_frs:setlen(n, 1) end
+terra Layer:set_grid_row_fr_count(n: int) self.grid.row_frs:setlen(n, 1) end
 
-terra Layer:get_grid_col_fr(i: int) return self.grid.col_frs(i-1, 0) end
-terra Layer:get_grid_row_fr(i: int) return self.grid.row_frs(i-1, 0) end
+terra Layer:get_grid_col_fr(i: int) return self.grid.col_frs(i, 1) end
+terra Layer:get_grid_row_fr(i: int) return self.grid.row_frs(i, 1) end
 
-terra Layer:set_grid_col_fr(i: int, v: num) self.grid.col_frs:set(i-1, v, 0) end
-terra Layer:set_grid_row_fr(i: int, v: num) self.grid.row_frs:set(i-1, v, 0) end
+terra Layer:set_grid_col_fr(i: int, v: num) self.grid.col_frs:set(i, v, 1) end
+terra Layer:set_grid_row_fr(i: int, v: num) self.grid.row_frs:set(i, v, 1) end
 
 terra Layer:get_grid_col_gap() return self.grid.col_gap end
 terra Layer:get_grid_row_gap() return self.grid.row_gap end
@@ -3429,6 +3549,9 @@ terra Layer:set_grid_flow(v: enum) self.grid.flow = v end
 
 terra Layer:get_grid_wrap() return self.grid.wrap end
 terra Layer:set_grid_wrap(v: int) self.grid.wrap = v end
+
+terra Layer:get_grid_min_lines() return self.grid.min_lines end
+terra Layer:set_grid_min_lines(v: int) self.grid.min_lines = v end
 
 terra Layer:get_min_cw() return self.min_cw end
 terra Layer:get_min_ch() return self.min_cw end
@@ -3834,6 +3957,9 @@ function build()
 
 		get_grid_wrap=1,
 		set_grid_wrap=1,
+
+		get_grid_min_lines=1,
+		set_grid_min_lines=1,
 
 		get_grid_col=1,
 		get_grid_row=1,

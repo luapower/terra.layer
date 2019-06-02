@@ -281,6 +281,8 @@ int8_t Layer_get_grid_flow(Layer*);
 void Layer_set_grid_flow(Layer*, int8_t);
 int32_t Layer_get_grid_wrap(Layer*);
 void Layer_set_grid_wrap(Layer*, int32_t);
+int32_t Layer_get_grid_min_lines(Layer*);
+void Layer_set_grid_min_lines(Layer*, int32_t);
 double Layer_get_min_cw(Layer*);
 double Layer_get_min_ch(Layer*);
 void Layer_set_min_cw(Layer*, double);
@@ -421,6 +423,7 @@ local getters = {
 	grid_row_gap = C.Layer_get_grid_row_gap,
 	grid_flow = C.Layer_get_grid_flow,
 	grid_wrap = C.Layer_get_grid_wrap,
+	grid_min_lines = C.Layer_get_grid_min_lines,
 	min_cw = C.Layer_get_min_cw,
 	min_ch = C.Layer_get_min_ch,
 	grid_col = C.Layer_get_grid_col,
@@ -522,6 +525,7 @@ local setters = {
 	grid_row_gap = C.Layer_set_grid_row_gap,
 	grid_flow = C.Layer_set_grid_flow,
 	grid_wrap = C.Layer_set_grid_wrap,
+	grid_min_lines = C.Layer_set_grid_min_lines,
 	min_cw = C.Layer_set_min_cw,
 	min_ch = C.Layer_set_min_ch,
 	grid_col = C.Layer_set_grid_col,
@@ -661,6 +665,11 @@ enum {
 	GRID_FLOW_T = 0,
 	GRID_FLOW_X = 0,
 	GRID_FLOW_Y = 2,
+	HIT_BACKGROUND = 2,
+	HIT_BORDER = 1,
+	HIT_NONE = 0,
+	HIT_TEXT = 3,
+	HIT_TEXT_SELECTION = 4,
 	LAYOUT_FLEX = 2,
 	LAYOUT_GRID = 3,
 	LAYOUT_NULL = 0,
