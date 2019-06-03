@@ -43,15 +43,6 @@ void Layer_set_x(Layer*, double);
 void Layer_set_y(Layer*, double);
 void Layer_set_w(Layer*, double);
 void Layer_set_h(Layer*, double);
-double Layer_get_padding_left(Layer*);
-double Layer_get_padding_right(Layer*);
-double Layer_get_padding_top(Layer*);
-double Layer_get_padding_bottom(Layer*);
-void Layer_set_padding_left(Layer*, double);
-void Layer_set_padding_right(Layer*, double);
-void Layer_set_padding_top(Layer*, double);
-void Layer_set_padding_bottom(Layer*, double);
-void Layer_set_padding(Layer*, double);
 double Layer_get_cw(Layer*);
 double Layer_get_ch(Layer*);
 void Layer_set_cw(Layer*, double);
@@ -73,6 +64,15 @@ void Layer_sync_top(Layer*, double, double);
 void Layer_sync_layout_separate_axes(Layer*, int8_t, double, double);
 int8_t Layer_get_layout_type(Layer*);
 void Layer_set_layout_type(Layer*, int8_t);
+double Layer_get_padding_left(Layer*);
+double Layer_get_padding_right(Layer*);
+double Layer_get_padding_top(Layer*);
+double Layer_get_padding_bottom(Layer*);
+void Layer_set_padding_left(Layer*, double);
+void Layer_set_padding_right(Layer*, double);
+void Layer_set_padding_top(Layer*, double);
+void Layer_set_padding_bottom(Layer*, double);
+void Layer_set_padding(Layer*, double);
 bool Layer_get_visible(Layer*);
 int8_t Layer_get_operator(Layer*);
 int8_t Layer_get_clip_content(Layer*);
@@ -295,6 +295,9 @@ int32_t Layer_get_grid_col_span(Layer*);
 int32_t Layer_get_grid_row_span(Layer*);
 void Layer_set_grid_col_span(Layer*, int32_t);
 void Layer_set_grid_row_span(Layer*, int32_t);
+int8_t Layer_get_hit_test_mask(Layer*);
+void Layer_set_hit_test_mask(Layer*, int8_t);
+int8_t Layer_hit_test(Layer*, _cairo*, double, double, int8_t, Layer**);
 ]]
 pcall(ffi.cdef, 'struct double2 { double _0; double _1; };')
 local getters = {
@@ -339,15 +342,15 @@ local getters = {
 	y = C.Layer_get_y,
 	w = C.Layer_get_w,
 	h = C.Layer_get_h,
-	padding_left = C.Layer_get_padding_left,
-	padding_right = C.Layer_get_padding_right,
-	padding_top = C.Layer_get_padding_top,
-	padding_bottom = C.Layer_get_padding_bottom,
 	cw = C.Layer_get_cw,
 	ch = C.Layer_get_ch,
 	cx = C.Layer_get_cx,
 	cy = C.Layer_get_cy,
 	layout_type = C.Layer_get_layout_type,
+	padding_left = C.Layer_get_padding_left,
+	padding_right = C.Layer_get_padding_right,
+	padding_top = C.Layer_get_padding_top,
+	padding_bottom = C.Layer_get_padding_bottom,
 	visible = C.Layer_get_visible,
 	operator = C.Layer_get_operator,
 	clip_content = C.Layer_get_clip_content,
@@ -430,6 +433,7 @@ local getters = {
 	grid_row = C.Layer_get_grid_row,
 	grid_col_span = C.Layer_get_grid_col_span,
 	grid_row_span = C.Layer_get_grid_row_span,
+	hit_test_mask = C.Layer_get_hit_test_mask,
 }
 local setters = {
 	index = C.Layer_set_index,
@@ -439,16 +443,16 @@ local setters = {
 	y = C.Layer_set_y,
 	w = C.Layer_set_w,
 	h = C.Layer_set_h,
-	padding_left = C.Layer_set_padding_left,
-	padding_right = C.Layer_set_padding_right,
-	padding_top = C.Layer_set_padding_top,
-	padding_bottom = C.Layer_set_padding_bottom,
-	padding = C.Layer_set_padding,
 	cw = C.Layer_set_cw,
 	ch = C.Layer_set_ch,
 	cx = C.Layer_set_cx,
 	cy = C.Layer_set_cy,
 	layout_type = C.Layer_set_layout_type,
+	padding_left = C.Layer_set_padding_left,
+	padding_right = C.Layer_set_padding_right,
+	padding_top = C.Layer_set_padding_top,
+	padding_bottom = C.Layer_set_padding_bottom,
+	padding = C.Layer_set_padding,
 	visible = C.Layer_set_visible,
 	operator = C.Layer_set_operator,
 	clip_content = C.Layer_set_clip_content,
@@ -532,6 +536,7 @@ local setters = {
 	grid_row = C.Layer_set_grid_row,
 	grid_col_span = C.Layer_set_grid_col_span,
 	grid_row_span = C.Layer_set_grid_row_span,
+	hit_test_mask = C.Layer_set_hit_test_mask,
 }
 local methods = {
 	free = C.Layer_free,
@@ -605,6 +610,7 @@ local methods = {
 	get_grid_row_fr = C.Layer_get_grid_row_fr,
 	set_grid_col_fr = C.Layer_set_grid_col_fr,
 	set_grid_row_fr = C.Layer_set_grid_row_fr,
+	hit_test = C.Layer_hit_test,
 }
 ffi.metatype('Layer', {
 	__index = function(self, k)

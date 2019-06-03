@@ -3,10 +3,14 @@
 	HTML-like box-model layouting and rendering engine with a C API.
 	Written by Cosmin Apreutesei. Public Domain.
 
-	How his box model works (and how it differs from the web's box model):
+	Uses cairo for path filling, stroking, clipping, masking and blending.
+	Uses trlib for text shaping and rendering.
+	Uses and boxblurlib for shadows.
+
+	How this box model works (and how it differs from the web's box model):
 
 	* the "layer box" is defined by (x, y, w, h).
-	* padding offsets are applied to the layer box, creating the "content box".
+	* paddings are applied to the layer box, creating the "content box".
 	* child layers are positioned relative to the content box.
 	* child layers can be clipped to the content box or to the layer box,
 	  subject to `clip_content`.
@@ -34,7 +38,7 @@ terra snapx(x: num, enable: bool)
 	return iif(enable, floor(x + .5), x)
 end
 
-terra snap_xw(x: num, w: num, enable: bool)
+terra snapxw(x: num, w: num, enable: bool)
 	if not enable then return x, w end
 	var x1 = floor(x + .5)
 	var x2 = floor(x + w + .5)
@@ -394,7 +398,7 @@ struct GridLayoutCol {
 }
 
 terra GridLayoutCol:setxw(x: num, w: num, moving: bool)
-	self.x, self.w = snap_xw(x, w, self.snap_x)
+	self.x, self.w = snapxw(x, w, self.snap_x)
 end
 
 struct GridLayout {
@@ -669,23 +673,6 @@ terra Layer:set_h(v: num)
 	end
 end
 
-terra Layer:get_padding_left  () return self.padding_left   end
-terra Layer:get_padding_right () return self.padding_right  end
-terra Layer:get_padding_top   () return self.padding_top    end
-terra Layer:get_padding_bottom() return self.padding_bottom end
-
-terra Layer:set_padding_left  (v: num) self.padding_left   = v end
-terra Layer:set_padding_right (v: num) self.padding_right  = v end
-terra Layer:set_padding_top   (v: num) self.padding_top    = v end
-terra Layer:set_padding_bottom(v: num) self.padding_bottom = v end
-
-terra Layer:set_padding(v: num)
-	self.padding_left   = v
-	self.padding_right  = v
-	self.padding_top    = v
-	self.padding_bottom = v
-end
-
 terra Layer:get_px() return self.padding_left end
 terra Layer:get_py() return self.padding_top end
 terra Layer:get_pw() return self.padding_left + self.padding_right end
@@ -697,7 +684,7 @@ terra Layer:get_ch() return self.h - self.ph end
 terra Layer:set_cw(cw: num) self.w = cw + (self.w - self.cw) end
 terra Layer:set_ch(ch: num) self.h = ch + (self.h - self.ch) end
 
-terra Layer:get_cx() return self.x + self.padding_left end
+terra Layer:get_cx() return self.x + self.padding_left end --in parent's content space
 terra Layer:get_cy() return self.y + self.padding_top end
 
 terra Layer:set_cx(cx: num) self.x = cx - self.w / 2 end
@@ -705,19 +692,8 @@ terra Layer:set_cy(cy: num) self.y = cy - self.h / 2 end
 
 terra Layer:snapx(x: num) return snapx(x, self.snap_x) end
 terra Layer:snapy(y: num) return snapx(y, self.snap_y) end
-terra Layer:snapxw(x: num, w: num) return snap_xw(x, w, self.snap_x) end
-terra Layer:snapyh(y: num, h: num) return snap_xw(y, h, self.snap_y) end
-
-terra Layer:padding_rect() --in box space
-	var px1 = self.padding_left
-	var py1 = self.padding_top
-	var px2 = self.padding_right
-	var py2 = self.padding_bottom
-	return
-		px1, py1,
-		self.w - (px1 + px2),
-		self.h - (py1 + py2)
-end
+terra Layer:snapxw(x: num, w: num) return snapxw(x, w, self.snap_x) end
+terra Layer:snapyh(y: num, h: num) return snapxw(y, h, self.snap_y) end
 
 --layer relative geometry & matrix -------------------------------------------
 
@@ -1448,7 +1424,7 @@ terra Layer:bbox(strict: bool) --in parent's content space
 			if self.clip_content ~= CLIP_NONE then
 				cbb:intersect(rect(self:background_rect(0)))
 				if self.clip_content == CLIP_PADDING then
-					cbb:intersect(rect(self:padding_rect()))
+					cbb:intersect(rect{self.px, self.py, self.cw, self.ch})
 				end
 			end
 			bb:bbox(cbb)
@@ -2224,7 +2200,7 @@ local function gen_funcs(X, Y, W, H)
 	end
 
 	local terra set_item_x(layer: &Layer, x: num, w: num, moving: bool)
-		x, w = snap_xw(x, w, layer.[SNAP_X])
+		x, w = snapxw(x, w, layer.[SNAP_X])
 		--TODO
 		--var set = moving and layer.transition or layer.end_value
 		--set(layer, X, x)
@@ -2306,7 +2282,7 @@ local function gen_funcs(X, Y, W, H)
 				if not isnan(line_baseline) then
 					y = snapx(y, snap_y)
 				else
-					y, h = snap_xw(y, h, layer.[SNAP_Y])
+					y, h = snapxw(y, h, layer.[SNAP_Y])
 					--TODO: layer:end_value(H, h)
 				end
 				--TODO: if not layer.moving then
@@ -2912,7 +2888,7 @@ local function gen_funcs(X, Y, W, H, COL)
 
 	--[[
 	local terra set_item_x(layer, x, w, moving)
-		x, w = snap_xw(x, w, layer[SNAP_X])
+		x, w = snapxw(x, w, layer[SNAP_X])
 		var set = moving and layer.transition or layer.end_value
 		set(layer, X, x)
 		set(layer, W, w)
@@ -2992,7 +2968,7 @@ local function gen_funcs(X, Y, W, H, COL)
 					w = layer.[_MIN_W]
 					x = x1 + (x2 - x1 - w) / 2
 				end
-				layer.[X], layer.[W] = snap_xw(x, w, snap_x)
+				layer.[X], layer.[W] = snapxw(x, w, snap_x)
 			end
 		end
 
@@ -3101,6 +3077,23 @@ terra Lib:dump_stats()
 end
 
 --C API ----------------------------------------------------------------------
+
+terra Layer:get_padding_left  () return self.padding_left   end
+terra Layer:get_padding_right () return self.padding_right  end
+terra Layer:get_padding_top   () return self.padding_top    end
+terra Layer:get_padding_bottom() return self.padding_bottom end
+
+terra Layer:set_padding_left  (v: num) self.padding_left   = v end
+terra Layer:set_padding_right (v: num) self.padding_right  = v end
+terra Layer:set_padding_top   (v: num) self.padding_top    = v end
+terra Layer:set_padding_bottom(v: num) self.padding_bottom = v end
+
+terra Layer:set_padding(v: num)
+	self.padding_left   = v
+	self.padding_right  = v
+	self.padding_top    = v
+	self.padding_bottom = v
+end
 
 do end --drawing
 
@@ -3577,6 +3570,17 @@ terra Layer:get_grid_row_span() return self.grid_row_span end
 terra Layer:set_grid_col_span(v: int) self.grid_col_span = v end
 terra Layer:set_grid_row_span(v: int) self.grid_row_span = v end
 
+--hit testing
+
+terra Layer:get_hit_test_mask() return self.hit_test_mask end
+terra Layer:set_hit_test_mask(v: enum) self.hit_test_mask = v end
+
+terra Layer:hit_test_out(cr: &context, x: num, y: num, reason: enum, out: &&Layer)
+	var layer, area = self:hit_test(cr, x, y, reason)
+	@out = layer
+	return area
+end
+
 --publish and build
 
 function build()
@@ -3714,6 +3718,9 @@ function build()
 
 		get_opacity=1,
 		set_opacity=1,
+
+		get_hit_test_mask=1,
+		set_hit_test_mask=1,
 
 		--borders
 
@@ -3978,6 +3985,7 @@ function build()
 		sync_top=1,
 		sync_layout_separate_axes=1, --for scrollbox
 		draw=1,
+		hit_test_out='hit_test',
 
 	}, true)
 
