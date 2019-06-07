@@ -143,6 +143,8 @@ double Layer_get_background_clip_border_offset(Layer*);
 void Layer_set_background_clip_border_offset(Layer*, double);
 uint32_t Layer_get_background_color(Layer*);
 void Layer_set_background_color(Layer*, uint32_t);
+bool Layer_get_background_color_set(Layer*);
+void Layer_set_background_color_set(Layer*, bool);
 double Layer_get_background_x1(Layer*);
 double Layer_get_background_y1(Layer*);
 double Layer_get_background_x2(Layer*);
@@ -383,6 +385,7 @@ local getters = {
 	background_operator = C.Layer_get_background_operator,
 	background_clip_border_offset = C.Layer_get_background_clip_border_offset,
 	background_color = C.Layer_get_background_color,
+	background_color_set = C.Layer_get_background_color_set,
 	background_x1 = C.Layer_get_background_x1,
 	background_y1 = C.Layer_get_background_y1,
 	background_x2 = C.Layer_get_background_x2,
@@ -489,6 +492,7 @@ local setters = {
 	background_operator = C.Layer_set_background_operator,
 	background_clip_border_offset = C.Layer_set_background_clip_border_offset,
 	background_color = C.Layer_set_background_color,
+	background_color_set = C.Layer_set_background_color_set,
 	background_x1 = C.Layer_set_background_x1,
 	background_y1 = C.Layer_set_background_y1,
 	background_x2 = C.Layer_set_background_x2,
@@ -644,17 +648,16 @@ enum {
 	ALIGN_TOP = 1,
 	AXIS_ORDER_XY = 1,
 	AXIS_ORDER_YX = 2,
-	BACKGROUND_COLOR = 1,
+	BACKGROUND_COLOR = 0,
 	BACKGROUND_EXTEND_NONE = 0,
 	BACKGROUND_EXTEND_PAD = 3,
 	BACKGROUND_EXTEND_REFLECT = 2,
 	BACKGROUND_EXTEND_REPEAT = 1,
-	BACKGROUND_GRADIENT = 12,
-	BACKGROUND_IMAGE = 8,
-	BACKGROUND_LINEAR_GRADIENT = 12,
-	BACKGROUND_NONE = 0,
-	BACKGROUND_PATTERN = 8,
-	BACKGROUND_RADIAL_GRADIENT = 13,
+	BACKGROUND_GRADIENT = 6,
+	BACKGROUND_IMAGE = 4,
+	BACKGROUND_LINEAR_GRADIENT = 6,
+	BACKGROUND_PATTERN = 4,
+	BACKGROUND_RADIAL_GRADIENT = 7,
 	CLIP_BACKGROUND = 2,
 	CLIP_NONE = 0,
 	CLIP_PADDING = 1,
@@ -676,10 +679,10 @@ enum {
 	HIT_NONE = 0,
 	HIT_TEXT = 3,
 	HIT_TEXT_SELECTION = 4,
-	LAYOUT_FLEX = 2,
+	LAYOUT_FLEXBOX = 2,
 	LAYOUT_GRID = 3,
 	LAYOUT_NULL = 0,
-	LAYOUT_TEXT = 1,
+	LAYOUT_TEXTBOX = 1,
 	OPERATOR_ADD = 12,
 	OPERATOR_ATOP = 5,
 	OPERATOR_CLEAR = 0,

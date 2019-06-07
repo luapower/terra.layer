@@ -194,13 +194,12 @@ end
 
 --background -----------------------------------------------------------------
 
-BACKGROUND_NONE            = 0
-BACKGROUND_COLOR           = 1
-BACKGROUND_PATTERN         = 8     --mask for LINEAR|RADIAL|IMAGE
-BACKGROUND_GRADIENT        = 8+4   --mask for LINEAR|RADIAL
-BACKGROUND_LINEAR_GRADIENT = 8+4
-BACKGROUND_RADIAL_GRADIENT = 8+4+1
-BACKGROUND_IMAGE           = 8
+BACKGROUND_COLOR           = 0
+BACKGROUND_PATTERN         = 4     --mask for LINEAR|RADIAL|IMAGE
+BACKGROUND_GRADIENT        = 4+2   --mask for LINEAR|RADIAL
+BACKGROUND_LINEAR_GRADIENT = 4+2
+BACKGROUND_RADIAL_GRADIENT = 4+2+1
+BACKGROUND_IMAGE           = 4
 
 map_enum(C, 'CAIRO_EXTEND_', 'BACKGROUND_EXTEND_')
 
@@ -252,6 +251,7 @@ struct Background (gettersandsetters) {
 	_type: enum; --BACKGROUND_*
 	hittable: bool;
 	operator: enum; --OPERATOR_*
+	color_set: bool;
 	-- overlapping between background clipping edge and border stroke.
 	-- -1..1 goes from inside to outside of border edge.
 	clip_border_offset: num;
@@ -1072,7 +1072,7 @@ end
 --background drawing ---------------------------------------------------------
 
 terra Layer:background_visible()
-	return self.background.type ~= BACKGROUND_NONE
+	return not (self.background.type == BACKGROUND_COLOR and not self.background.color_set)
 end
 
 terra Layer:background_rect(size_offset: num)
@@ -1646,10 +1646,10 @@ end
 
 --layout plugin interface ----------------------------------------------------
 
-LAYOUT_NULL = 0
-LAYOUT_TEXT = 1
-LAYOUT_FLEX = 2
-LAYOUT_GRID = 2+1
+LAYOUT_NULL    = 0
+LAYOUT_TEXTBOX = 1
+LAYOUT_FLEXBOX = 2
+LAYOUT_GRID    = 2+1
 
 --layout interface forwarders
 terra Layer:sync_layout()          self.layout_solver.sync(self) end
@@ -1766,7 +1766,7 @@ local terra null_sync_top(self: &Layer, w: num, h: num)
 	end
 end
 
-null_layout = constant(`LayoutSolver {
+local null_layout = constant(`LayoutSolver {
 	type       = LAYOUT_NULL;
 	axis_order = 0;
 	sync       = null_sync;
@@ -1777,7 +1777,7 @@ null_layout = constant(`LayoutSolver {
 	sync_top   = null_sync_top;
 })
 
---text layout ----------------------------------------------------------------
+--textbox layout -------------------------------------------------------------
 
 local terra text_sync(self: &Layer)
 	if not self.visible then return end
@@ -1839,8 +1839,8 @@ local terra text_sync_y(self: &Layer, other_axis_synced: bool)
 	end
 end
 
-text_layout = constant(`LayoutSolver {
-	type       = LAYOUT_TEXT;
+local text_layout = constant(`LayoutSolver {
+	type       = LAYOUT_TEXTBOX;
 	axis_order = 0;
 	sync       = text_sync;
 	sync_min_w = text_sync_min_w;
@@ -2053,7 +2053,7 @@ local function align_items_main_axis_func(items_T, GET_ITEM, T, X, W)
 	end
 end
 
---flex layout ----------------------------------------------------------------
+--flexbox layout -------------------------------------------------------------
 
 local function items_max_w(_MIN_W)
 	return terra(self: &Layer, i: int, j: int)
@@ -2442,8 +2442,8 @@ local terra flex_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-flex_layout = constant(`LayoutSolver {
-	type       = LAYOUT_FLEX;
+local flex_layout = constant(`LayoutSolver {
+	type       = LAYOUT_FLEXBOX;
 	axis_order = AXIS_ORDER_XY;
 	sync       = flex_sync;
 	sync_min_w = flex_sync_min_w;
@@ -2991,7 +2991,7 @@ local terra grid_sync(self: &Layer)
 	self:sync_layout_separate_axes(0, -inf, -inf)
 end
 
-grid_layout = constant(`LayoutSolver {
+local grid_layout = constant(`LayoutSolver {
 	type       = LAYOUT_GRID;
 	axis_order = AXIS_ORDER_XY;
 	sync       = grid_sync;
@@ -3005,7 +3005,7 @@ grid_layout = constant(`LayoutSolver {
 --layout plugin vtable -------------------------------------------------------
 
 --NOTE: layouts must be added in the order of LAYOUT_* constants.
-layouts = constant(`arrayof(LayoutSolver,
+local layouts = constant(`arrayof(LayoutSolver,
 	null_layout,
 	text_layout,
 	flex_layout,
@@ -3215,7 +3215,13 @@ terra Layer:get_background_clip_border_offset() return self.background.clip_bord
 terra Layer:set_background_clip_border_offset(v: num) self.background.clip_border_offset = v end
 
 terra Layer:get_background_color() return self.background.color.uint end
-terra Layer:set_background_color(v: uint) self.background.color = color{uint = v} end
+terra Layer:set_background_color(v: uint)
+	self.background.color = color{uint = v}
+	self.background.color_set = true
+end
+
+terra Layer:get_background_color_set() return self.background.color_set end
+terra Layer:set_background_color_set(v: bool) self.background.color_set = v end
 
 terra Layer:get_background_x1() return self.background.pattern.gradient.x1 end
 terra Layer:get_background_y1() return self.background.pattern.gradient.y1 end
@@ -3777,6 +3783,9 @@ function build()
 
 		get_background_color=1,
 		set_background_color=1,
+
+		get_background_color_set=1,
+		set_background_color_set=1,
 
 		get_background_x1=1,
 		get_background_y1=1,
