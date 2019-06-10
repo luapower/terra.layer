@@ -22,15 +22,15 @@
 
 ]]
 
-setfenv(1, require'low'.module())
-require'memcheck'
-require'cairolib'
-require'trlib_paint_cairo'
-tr = require'trlib'
-require'bitmaplib'
-require'boxblurlib'
-require'utf8lib'
-require'box2dlib'
+setfenv(1, require'terra/low'.module())
+require'terra/memcheck'
+require'terra/cairo'
+require'terra/tr_paint_cairo'
+tr = require'terra/tr'
+require'terra/bitmap'
+require'terra/boxblur'
+require'terra/utf8'
+require'terra/box2d'
 
 --utils ----------------------------------------------------------------------
 
