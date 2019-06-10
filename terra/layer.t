@@ -3590,7 +3590,7 @@ end
 --publish and build
 
 function build()
-	local public = publish'layerlib'
+	local public = publish'layer'
 
 	if memtotal then
 		public(memtotal)
