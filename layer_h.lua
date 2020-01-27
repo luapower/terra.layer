@@ -1,7 +1,8 @@
 -- This file was auto-generated. Modify at your own risk.
 local ffi = require'ffi'
 local C = ffi.load'layer'
-local M = {C = C, types = {}}
+local M = {C = C, types = {}, __index = C}
+setmetatable(M, M)
 ffi.cdef[[
 uint64_t memtotal(void);
 void memreport(void);

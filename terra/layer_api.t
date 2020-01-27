@@ -295,9 +295,7 @@ end
 
 do end --space helpers
 
-terra Layer:from_window(x: num, y: num)
-	return self.l:from_window(x, y)
-end
+terra Layer:from_window(x: num, y: num) return self.l:from_window(x, y) end
 
 do end --drawing
 
