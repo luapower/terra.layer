@@ -14,8 +14,8 @@ local win = app:window{
 }
 
 local fonts = {
-	glue.readfile'media/fonts/OpenSans-Regular.ttf';
-	glue.readfile'media/fonts/OpenSans-Bold.ttf';
+	glue.readfile'OpenSans-Regular.ttf';
+	glue.readfile'OpenSans-Bold.ttf';
 }
 
 local function load_font(font_id, file_data_buf, file_size_buf)
