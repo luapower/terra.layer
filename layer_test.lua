@@ -15,8 +15,7 @@ local push, pop = table.insert, table.remove
 --utils ----------------------------------------------------------------------
 
 local function save_table(file, t)
-	assert(glue.writefile(file,
-		'return '..pp.format(t, {indent = '\t', sort_keys = true})))
+	assert(pp.save(file, t))
 end
 
 local function load_table(file)
